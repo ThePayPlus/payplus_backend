@@ -1,0 +1,24 @@
+{
+  "name": "payplus_backend",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "db:init": "node db_init.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "payplus",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "bcrypt": "^5.1.1",
+    "dotenv": "^16.4.1",
+    "express": "^5.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "mysql2": "^3.14.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.3"
+  }
+}
