@@ -40,14 +40,13 @@ async function initializeDb() {
 
 async function createTables(connection) {
   try {
-    // Users table
+    // Users table - removed role field
     await connection.query(`
       CREATE TABLE IF NOT EXISTS users (
         phone bigint(50) NOT NULL,
         name varchar(250) NOT NULL,
         email varchar(250) NOT NULL,
         password varchar(250) NOT NULL,
-        role varchar(250) NOT NULL,
         balance bigint(50) NOT NULL,
         PRIMARY KEY (phone)
       )
@@ -143,14 +142,14 @@ async function insertSampleData(connection) {
     const hashedPassword4 = await bcrypt.hash('3187', saltRounds);
     const hashedPassword5 = await bcrypt.hash('3393', saltRounds);
     
-    // Insert sample users with hashed passwords
+    // Insert sample users with hashed passwords - removed role field
     await connection.query(`
-      INSERT INTO users (phone, name, email, password, role, balance) VALUES
-      (6281301220081, 'Fausta Akbar', 'fausta@gmail.com', ?, 'gold', 10300000),
-      (6281301220310, 'Bryant Jonathan', 'bryant@gmail.com', ?, 'gold', 6700000),
-      (6281301223168, 'Andre Aditya Amann', 'andre@gmail.com', ?, 'bronze', 5000000),
-      (6281301223187, 'Zaidaan Afif', 'zaidaan@gmail.com', ?, 'bronze', 3000000),
-      (6281301223393, 'Rafi Suwardana', 'rafisuwardana@gmail.com', ?, 'bronze', 8000000)
+      INSERT INTO users (phone, name, email, password, balance) VALUES
+      (6281301220081, 'Fausta Akbar', 'fausta@gmail.com', ?, 10300000),
+      (6281301220310, 'Bryant Jonathan', 'bryant@gmail.com', ?, 6700000),
+      (6281301223168, 'Andre Aditya Amann', 'andre@gmail.com', ?, 5000000),
+      (6281301223187, 'Zaidaan Afif', 'zaidaan@gmail.com', ?, 3000000),
+      (6281301223393, 'Rafi Suwardana', 'rafisuwardana@gmail.com', ?, 8000000)
     `, [hashedPassword1, hashedPassword2, hashedPassword3, hashedPassword4, hashedPassword5]);
     console.log('Sample users created with hashed passwords');
     
@@ -213,4 +212,4 @@ initializeDb().then(() => {
 }).catch(err => {
   console.error('Failed to initialize database:', err);
   process.exit(1);
-}); 
+});

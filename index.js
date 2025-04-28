@@ -3,12 +3,20 @@ const express = require('express');
 const mysql = require('mysql2/promise');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
+const cors = require('cors');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Middleware
 app.use(express.json());
+
+// Konfigurasi CORS - mengizinkan semua origin
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 
 // Database connection
 const dbConfig = {
@@ -102,7 +110,7 @@ app.post('/api/auth/login', async (req, res) => {
     
     // Generate JWT token
     const token = jwt.sign(
-      { phone: user.phone, role: user.role },
+      { phone: user.phone },
       process.env.JWT_SECRET || 'payplus_secret_key',
       { expiresIn: '24h' }
     );
@@ -113,7 +121,6 @@ app.post('/api/auth/login', async (req, res) => {
         phone: user.phone,
         name: user.name,
         email: user.email,
-        role: user.role,
         balance: parseFloat(user.balance),
         token
       }
@@ -153,8 +160,8 @@ app.post('/api/auth/register', async (req, res) => {
     
     // Insert new user with hashed password
     await pool.query(
-      'INSERT INTO users (phone, name, email, password, role, balance) VALUES (?, ?, ?, ?, ?, ?)',
-      [phone, name, email, hashedPassword, 'bronze', 0]
+      'INSERT INTO users (phone, name, email, password, balance) VALUES (?, ?, ?, ?, ?)',
+      [phone, name, email, hashedPassword, 0]
     );
     
     res.status(201).json({ message: 'Registrasi berhasil' });
@@ -170,7 +177,7 @@ app.get('/api/profile/:phone', async (req, res) => {
     const { phone } = req.params;
     
     const [rows] = await pool.query(
-      'SELECT phone, name, email, role, balance FROM users WHERE phone = ?',
+      'SELECT phone, name, email, balance FROM users WHERE phone = ?',
       [phone]
     );
     
@@ -182,7 +189,6 @@ app.get('/api/profile/:phone', async (req, res) => {
       phone: rows[0].phone,
       name: rows[0].name,
       email: rows[0].email,
-      role: rows[0].role,
       balance: parseFloat(rows[0].balance)
     });
   } catch (error) {
