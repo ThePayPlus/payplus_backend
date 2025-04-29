@@ -1255,6 +1255,93 @@ app.post('/api/topup', authenticateToken, async (req, res) => {
   }
 });
 
+// Recent transactions endpoint
+app.get('/api/recent-transactions', authenticateToken, async (req, res) => {
+  try {
+    const phone = req.user.phone;
+    
+    // Get recent income transactions with sender names
+    const [incomeRecords] = await pool.query(`
+      SELECT 
+        i.id,
+        i.amount, 
+        i.sender_phone, 
+        u.name AS sender_name, 
+        i.type, 
+        i.date, 
+        i.message,
+        'income' AS transaction_type
+      FROM income i
+      LEFT JOIN users u ON i.sender_phone = u.phone
+      WHERE i.phone = ?
+      ORDER BY i.date DESC, i.id DESC
+      LIMIT 5
+    `, [phone]);
+    
+    // Get recent expense transactions with receiver names
+    const [expenseRecords] = await pool.query(`
+      SELECT 
+        e.id,
+        e.amount, 
+        e.receiver_phone, 
+        u.name AS receiver_name, 
+        e.type, 
+        e.date, 
+        e.message,
+        'expense' AS transaction_type
+      FROM expense e
+      LEFT JOIN users u ON e.receiver_phone = u.phone
+      WHERE e.phone = ?
+      ORDER BY e.date DESC, e.id DESC
+      LIMIT 5
+    `, [phone]);
+    
+    // Combine and format the response data
+    const formattedIncome = incomeRecords.map(record => ({
+      id: record.id,
+      amount: record.amount.toString(),
+      otherParty: record.sender_name || 'Unknown',
+      otherPartyPhone: record.sender_phone.toString(),
+      type: record.type,
+      date: formatDate(record.date),
+      message: record.message || "",
+      transactionType: record.transaction_type
+    }));
+    
+    const formattedExpense = expenseRecords.map(record => ({
+      id: record.id,
+      amount: record.amount.toString(),
+      otherParty: record.receiver_name || 'Unknown',
+      otherPartyPhone: record.receiver_phone.toString(),
+      type: record.type,
+      date: formatDate(record.date),
+      message: record.message || "",
+      transactionType: record.transaction_type
+    }));
+    
+    // Combine both types, sort by date (most recent first), and limit to 5
+    const allTransactions = [...formattedIncome, ...formattedExpense]
+      .sort((a, b) => {
+        // Sort by date first (newest first)
+        const dateCompare = new Date(b.date) - new Date(a.date);
+        // If dates are the same, sort by ID (newest first, assuming higher ID = newer)
+        return dateCompare !== 0 ? dateCompare : b.id - a.id;
+      })
+      .slice(0, 5);
+    
+    res.json({
+      success: true,
+      data: allTransactions
+    });
+  } catch (error) {
+    console.error('Recent transactions error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Gagal mengambil data transaksi terbaru' 
+    });
+  }
+});
+
 // Initialize database and start server
 initializeDb().then(() => {
   app.listen(PORT, () => {
