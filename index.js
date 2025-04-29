@@ -1169,6 +1169,92 @@ app.post('/api/transfer', authenticateToken, async (req, res) => {
   }
 });
 
+// Topup endpoint
+app.post('/api/topup', authenticateToken, async (req, res) => {
+  try {
+    const phone = req.user.phone;
+    const { amount } = req.body;
+    
+    // Validate required fields
+    if (!amount) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Jumlah topup harus diisi'
+      });
+    }
+    
+    // Validate amount is a positive number
+    const topupAmount = parseInt(amount);
+    if (isNaN(topupAmount) || topupAmount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Jumlah topup harus berupa angka positif'
+      });
+    }
+    
+    // Check if user exists
+    const [users] = await pool.query(
+      'SELECT * FROM users WHERE phone = ?',
+      [phone]
+    );
+    
+    if (users.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Pengguna tidak ditemukan'
+      });
+    }
+    
+    const user = users[0];
+    const currentBalance = parseInt(user.balance);
+    const newBalance = currentBalance + topupAmount;
+    
+    // Begin transaction
+    const connection = await pool.getConnection();
+    await connection.beginTransaction();
+    
+    try {
+      // Update user's balance
+      await connection.query(
+        'UPDATE users SET balance = ? WHERE phone = ?',
+        [newBalance, phone]
+      );
+      
+      // Create income record for topup
+      const currentDate = new Date().toISOString().split('T')[0]; // Format: YYYY-MM-DD
+      await connection.query(
+        'INSERT INTO income (amount, phone, sender_phone, type, date, message) VALUES (?, ?, ?, ?, ?, ?)',
+        [topupAmount, phone, phone, 'topup', currentDate, 'Top up saldo']
+      );
+      
+      // Commit transaction
+      await connection.commit();
+      
+      res.json({
+        success: true,
+        message: 'Top up berhasil',
+        data: {
+          topupAmount: topupAmount.toString(),
+          newBalance: newBalance.toString(),
+          date: currentDate
+        }
+      });
+    } catch (error) {
+      // Rollback in case of error
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  } catch (error) {
+    console.error('Topup error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Gagal melakukan top up' 
+    });
+  }
+});
+
 // Initialize database and start server
 initializeDb().then(() => {
   app.listen(PORT, () => {
