@@ -15,7 +15,7 @@ app.use(cookieParser());
 
 // Konfigurasi CORS - mengizinkan origin yang spesifik untuk mendukung credentials
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:5173', // Ubah ke URL frontend Anda
+  origin: '*', // Ubah ke URL frontend Anda
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true // Enable credentials (cookies, authorization headers, etc.)
@@ -384,15 +384,35 @@ app.post('/api/savings', authenticateToken, async (req, res) => {
       });
     }
     
-    await pool.query(
+    // Insert the new savings record
+    const [result] = await pool.query(
       'INSERT INTO savings (phone, nama, deskripsi, target, terkumpul) VALUES (?, ?, ?, ?, ?)',
       [phone, nama, deskripsi, target, terkumpul]
     );
     
-    res.status(201).json({ message: 'Tabungan berhasil ditambahkan' });
+    // Get the inserted savings record to return in response
+    const [newSavings] = await pool.query(
+      'SELECT id, nama, deskripsi, target, terkumpul FROM savings WHERE id = ?',
+      [result.insertId]
+    );
+    
+    res.status(201).json({ 
+      success: true,
+      message: 'Tabungan berhasil ditambahkan',
+      data: {
+        id: newSavings[0].id,
+        nama: newSavings[0].nama,
+        deskripsi: newSavings[0].deskripsi || "",
+        target: newSavings[0].target.toString(),
+        terkumpul: newSavings[0].terkumpul.toString()
+      }
+    });
   } catch (error) {
     console.error('Create savings error:', error);
-    res.status(500).json({ message: 'Gagal menambahkan tabungan' });
+    res.status(500).json({ 
+      success: false,
+      message: 'Gagal menambahkan tabungan'
+    });
   }
 });
 
@@ -481,7 +501,167 @@ app.get('/api/savings', authenticateToken, async (req, res) => {
   }
 });
 
+// Update savings accumulated amount
+app.patch('/api/savings/:id', authenticateToken, async (req, res) => {
+  try {
+    const phone = req.user.phone;
+    const savingsId = req.params.id;
+    const { terkumpul } = req.body;
+    
+    // Validate input
+    if (terkumpul === undefined) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Nilai terkumpul harus diisi' 
+      });
+    }
+    
+    // Check if the savings record exists and belongs to the user
+    const [savings] = await pool.query(
+      'SELECT * FROM savings WHERE id = ? AND phone = ?',
+      [savingsId, phone]
+    );
+    
+    if (savings.length === 0) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Data tabungan tidak ditemukan atau bukan milik Anda' 
+      });
+    }
+
+    // Add the new amount to the existing terkumpul value
+    const currentAmount = parseInt(savings[0].terkumpul);
+    const additionalAmount = parseInt(terkumpul);
+    const newTotalAmount = currentAmount + additionalAmount;
+    
+    // Update with the new total
+    await pool.query(
+      'UPDATE savings SET terkumpul = ? WHERE id = ? AND phone = ?',
+      [newTotalAmount, savingsId, phone]
+    );
+    
+    // Get the updated savings record
+    const [updatedSavings] = await pool.query(
+      'SELECT id, nama, deskripsi, target, terkumpul FROM savings WHERE id = ?',
+      [savingsId]
+    );
+    
+    res.json({ 
+      success: true,
+      message: 'Tabungan berhasil diperbarui',
+      data: {
+        id: updatedSavings[0].id,
+        nama: updatedSavings[0].nama,
+        deskripsi: updatedSavings[0].deskripsi || "",
+        target: updatedSavings[0].target.toString(),
+        terkumpul: updatedSavings[0].terkumpul.toString()
+      }
+    });
+  } catch (error) {
+    console.error('Update savings error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Gagal memperbarui tabungan' 
+    });
+  }
+});
+
+// Delete savings record
+app.delete('/api/savings/:id', authenticateToken, async (req, res) => {
+  try {
+    const phone = req.user.phone;
+    const savingsId = req.params.id;
+    
+    // Check if the savings record exists and belongs to the user
+    const [savings] = await pool.query(
+      'SELECT * FROM savings WHERE id = ? AND phone = ?',
+      [savingsId, phone]
+    );
+    
+    if (savings.length === 0) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Data tabungan tidak ditemukan atau bukan milik Anda' 
+      });
+    }
+    
+    // Save the data before deletion for response
+    const deletedSavings = {
+      id: savings[0].id,
+      nama: savings[0].nama,
+      deskripsi: savings[0].deskripsi || "",
+      target: savings[0].target.toString(),
+      terkumpul: savings[0].terkumpul.toString()
+    };
+    
+    // Delete the savings record
+    await pool.query(
+      'DELETE FROM savings WHERE id = ? AND phone = ?',
+      [savingsId, phone]
+    );
+    
+    res.json({ 
+      success: true,
+      message: 'Tabungan berhasil dihapus',
+      data: deletedSavings
+    });
+  } catch (error) {
+    console.error('Delete savings error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Gagal menghapus tabungan' 
+    });
+  }
+});
+
 // Bills endpoints
+// Create new bill
+app.post('/api/bills', authenticateToken, async (req, res) => {
+  try {
+    const phone = req.user.phone;
+    const { name, amount, dueDate, category } = req.body;
+    
+    // Validate required fields
+    if (!name || !amount || !dueDate || !category) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Semua kolom (name, amount, dueDate, category) harus diisi' 
+      });
+    }
+    
+    // Insert the new bill
+    const [result] = await pool.query(
+      'INSERT INTO bill (phone, name, amount, dueDate, category) VALUES (?, ?, ?, ?, ?)',
+      [phone, name, amount, dueDate, category]
+    );
+    
+    // Get the inserted bill
+    const [newBill] = await pool.query(
+      'SELECT id, name, amount, dueDate, category FROM bill WHERE id = ?',
+      [result.insertId]
+    );
+    
+    res.status(201).json({ 
+      success: true,
+      message: 'Tagihan berhasil ditambahkan',
+      data: {
+        id: newBill[0].id,
+        name: newBill[0].name,
+        amount: newBill[0].amount.toString(),
+        dueDate: newBill[0].dueDate,
+        category: newBill[0].category
+      }
+    });
+  } catch (error) {
+    console.error('Create bill error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Gagal menambahkan tagihan' 
+    });
+  }
+});
+
+// Get bills
 app.get('/api/bills', authenticateToken, async (req, res) => {
   try {
     const phone = req.user.phone;
@@ -496,6 +676,114 @@ app.get('/api/bills', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Get bills error:', error);
     res.status(500).json({ message: 'Gagal mengambil data tagihan' });
+  }
+});
+
+// Update bill
+app.put('/api/bills/:id', authenticateToken, async (req, res) => {
+  try {
+    const phone = req.user.phone;
+    const billId = req.params.id;
+    const { name, amount, dueDate, category } = req.body;
+    
+    // Validate required fields
+    if (!name || !amount || !dueDate || !category) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Semua kolom (name, amount, dueDate, category) harus diisi' 
+      });
+    }
+    
+    // Check if the bill exists and belongs to the user
+    const [bills] = await pool.query(
+      'SELECT * FROM bill WHERE id = ? AND phone = ?',
+      [billId, phone]
+    );
+    
+    if (bills.length === 0) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Data tagihan tidak ditemukan atau bukan milik Anda' 
+      });
+    }
+    
+    // Update the bill
+    await pool.query(
+      'UPDATE bill SET name = ?, amount = ?, dueDate = ?, category = ? WHERE id = ? AND phone = ?',
+      [name, amount, dueDate, category, billId, phone]
+    );
+    
+    // Get the updated bill
+    const [updatedBill] = await pool.query(
+      'SELECT id, name, amount, dueDate, category FROM bill WHERE id = ?',
+      [billId]
+    );
+    
+    res.json({ 
+      success: true,
+      message: 'Tagihan berhasil diperbarui',
+      data: {
+        id: updatedBill[0].id,
+        name: updatedBill[0].name,
+        amount: updatedBill[0].amount.toString(),
+        dueDate: updatedBill[0].dueDate,
+        category: updatedBill[0].category
+      }
+    });
+  } catch (error) {
+    console.error('Update bill error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Gagal memperbarui tagihan' 
+    });
+  }
+});
+
+// Delete bill
+app.delete('/api/bills/:id', authenticateToken, async (req, res) => {
+  try {
+    const phone = req.user.phone;
+    const billId = req.params.id;
+    
+    // Check if the bill exists and belongs to the user
+    const [bills] = await pool.query(
+      'SELECT * FROM bill WHERE id = ? AND phone = ?',
+      [billId, phone]
+    );
+    
+    if (bills.length === 0) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Data tagihan tidak ditemukan atau bukan milik Anda' 
+      });
+    }
+    
+    // Save the data before deletion for response
+    const deletedBill = {
+      id: bills[0].id,
+      name: bills[0].name,
+      amount: bills[0].amount.toString(),
+      dueDate: bills[0].dueDate,
+      category: bills[0].category
+    };
+    
+    // Delete the bill
+    await pool.query(
+      'DELETE FROM bill WHERE id = ? AND phone = ?',
+      [billId, phone]
+    );
+    
+    res.json({ 
+      success: true,
+      message: 'Tagihan berhasil dihapus',
+      data: deletedBill
+    });
+  } catch (error) {
+    console.error('Delete bill error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Gagal menghapus tagihan' 
+    });
   }
 });
 
@@ -604,6 +892,66 @@ app.get('/api/income-record', authenticateToken, async (req, res) => {
   }
 });
 
+// Expense record endpoint
+app.get('/api/expense-record', authenticateToken, async (req, res) => {
+  try {
+    const phone = req.user.phone;
+    
+    // Join expense table with users table to get receiver names
+    const [expenseRecords] = await pool.query(`
+      SELECT 
+        e.amount, 
+        e.receiver_phone, 
+        u.name AS receiver, 
+        e.type, 
+        e.date, 
+        e.message
+      FROM expense e
+      LEFT JOIN users u ON e.receiver_phone = u.phone
+      WHERE e.phone = ?
+      ORDER BY e.date DESC
+    `, [phone]);
+    
+    // Get summary statistics
+    const [summaryResults] = await pool.query(`
+      SELECT 
+        SUM(amount) as total_expense,
+        COUNT(*) as total_transactions,
+        SUM(CASE WHEN type = 'normal' THEN amount ELSE 0 END) as total_normal,
+        SUM(CASE WHEN type = 'gift' THEN amount ELSE 0 END) as total_gift,
+        COUNT(CASE WHEN type = 'normal' THEN 1 END) as count_normal,
+        COUNT(CASE WHEN type = 'gift' THEN 1 END) as count_gift
+      FROM expense
+      WHERE phone = ?
+    `, [phone]);
+    
+    const summary = {
+      total_expense: summaryResults[0].total_expense ? parseInt(summaryResults[0].total_expense).toString() : "0",
+      total_transactions: summaryResults[0].total_transactions,
+      total_normal: summaryResults[0].total_normal ? parseInt(summaryResults[0].total_normal).toString() : "0",
+      total_gift: summaryResults[0].total_gift ? parseInt(summaryResults[0].total_gift).toString() : "0",
+      count_normal: summaryResults[0].count_normal || 0,
+      count_gift: summaryResults[0].count_gift || 0
+    };
+    
+    // Format the response data
+    const formattedRecords = expenseRecords.map(record => ({
+      amount: record.amount.toString(),
+      receiver: record.receiver || 'Unknown', // Handle case where receiver might not be in users table
+      type: record.type,
+      message: record.message || ""
+    }));
+    
+    res.json({
+      summary: summary,
+      records: formattedRecords
+    });
+  } catch (error) {
+    console.error('Get expense records error:', error);
+    res.status(500).json({ message: 'Gagal mengambil data riwayat pengeluaran' });
+  }
+});
+
 // Test endpoint to check headers and cookies
 app.get('/api/test-headers', (req, res) => {
   console.log('Received headers:', req.headers);
@@ -615,6 +963,40 @@ app.get('/api/test-headers', (req, res) => {
     authHeader: req.headers['authorization'],
     tokenCookie: req.cookies.token
   });
+});
+
+// Upcoming bills endpoint
+app.get('/api/upcoming-bills', authenticateToken, async (req, res) => {
+  try {
+    const phone = req.user.phone;
+    
+    // Get upcoming bills
+    // Convert string dates to proper date objects for comparison
+    const [billsRecords] = await pool.query(`
+      SELECT 
+        id,
+        name as nameBills,
+        amount,
+        dueDate,
+        category
+      FROM bill
+      WHERE phone = ?
+      ORDER BY STR_TO_DATE(dueDate, '%Y-%m-%d') ASC
+    `, [phone]);
+    
+    // Format the response data
+    const formattedBills = billsRecords.map(bill => ({
+      nameBills: bill.nameBills,
+      amount: bill.amount.toString(),
+      dueDate: bill.dueDate,
+      category: bill.category
+    }));
+    
+    res.json(formattedBills);
+  } catch (error) {
+    console.error('Get upcoming bills error:', error);
+    res.status(500).json({ message: 'Gagal mengambil data tagihan' });
+  }
 });
 
 // Helper function to format date
