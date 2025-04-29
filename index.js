@@ -952,6 +952,40 @@ app.get('/api/expense-record', authenticateToken, async (req, res) => {
   }
 });
 
+// Search user by phone number endpoint
+app.get('/api/search-user/:phone', authenticateToken, async (req, res) => {
+  try {
+    const searchPhone = req.params.phone;
+    
+    // Search for the exact phone number
+    const [users] = await pool.query(
+      'SELECT phone, name FROM users WHERE phone = ?',
+      [searchPhone]
+    );
+    
+    if (users.length === 0) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'User tidak ditemukan'
+      });
+    }
+    
+    res.json({
+      success: true,
+      data: {
+        phone: users[0].phone.toString(),
+        name: users[0].name
+      }
+    });
+  } catch (error) {
+    console.error('Search user error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Gagal mencari user' 
+    });
+  }
+});
+
 // Test endpoint to check headers and cookies
 app.get('/api/test-headers', (req, res) => {
   console.log('Received headers:', req.headers);
@@ -1005,6 +1039,308 @@ function formatDate(date) {
   const d = new Date(date);
   return d.toISOString().split('T')[0]; // Format as YYYY-MM-DD
 }
+
+// Transfer endpoint
+app.post('/api/transfer', authenticateToken, async (req, res) => {
+  try {
+    const senderPhone = req.user.phone;
+    const { receiverPhone, amount, message, type = 'normal' } = req.body;
+    
+    // Validate required fields
+    if (!receiverPhone || !amount) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Nomor penerima dan jumlah transfer harus diisi'
+      });
+    }
+    
+    // Validate amount is a positive number
+    const transferAmount = parseInt(amount);
+    if (isNaN(transferAmount) || transferAmount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Jumlah transfer harus berupa angka positif'
+      });
+    }
+    
+    // Check if sender exists and has sufficient balance
+    const [senders] = await pool.query(
+      'SELECT * FROM users WHERE phone = ?',
+      [senderPhone]
+    );
+    
+    if (senders.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Pengguna pengirim tidak ditemukan'
+      });
+    }
+    
+    const sender = senders[0];
+    const senderBalance = parseInt(sender.balance);
+    
+    if (senderBalance < transferAmount) {
+      return res.status(400).json({
+        success: false,
+        message: 'Saldo tidak mencukupi untuk melakukan transfer'
+      });
+    }
+    
+    // Check if receiver exists
+    const [receivers] = await pool.query(
+      'SELECT * FROM users WHERE phone = ?',
+      [receiverPhone]
+    );
+    
+    if (receivers.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Pengguna penerima tidak ditemukan'
+      });
+    }
+    
+    const receiver = receivers[0];
+    const receiverBalance = parseInt(receiver.balance);
+    
+    // Begin transaction
+    const connection = await pool.getConnection();
+    await connection.beginTransaction();
+    
+    try {
+      // Update sender's balance
+      await connection.query(
+        'UPDATE users SET balance = ? WHERE phone = ?',
+        [senderBalance - transferAmount, senderPhone]
+      );
+      
+      // Update receiver's balance
+      await connection.query(
+        'UPDATE users SET balance = ? WHERE phone = ?',
+        [receiverBalance + transferAmount, receiverPhone]
+      );
+      
+      // Create expense record for sender
+      const currentDate = new Date().toISOString().split('T')[0]; // Format: YYYY-MM-DD
+      await connection.query(
+        'INSERT INTO expense (amount, phone, receiver_phone, type, date, message) VALUES (?, ?, ?, ?, ?, ?)',
+        [transferAmount, senderPhone, receiverPhone, type, currentDate, message]
+      );
+      
+      // Create income record for receiver
+      await connection.query(
+        'INSERT INTO income (amount, phone, sender_phone, type, date, message) VALUES (?, ?, ?, ?, ?, ?)',
+        [transferAmount, receiverPhone, senderPhone, type, currentDate, message]
+      );
+      
+      // Commit transaction
+      await connection.commit();
+      
+      // Get updated sender balance
+      const [updatedSender] = await pool.query(
+        'SELECT balance FROM users WHERE phone = ?',
+        [senderPhone]
+      );
+      
+      res.json({
+        success: true,
+        message: 'Transfer berhasil',
+        data: {
+          transferAmount: transferAmount.toString(),
+          receiverPhone: receiverPhone.toString(),
+          receiverName: receiver.name,
+          date: currentDate,
+          remainingBalance: updatedSender[0].balance.toString(),
+          type: type
+        }
+      });
+    } catch (error) {
+      // Rollback in case of error
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  } catch (error) {
+    console.error('Transfer error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Gagal melakukan transfer' 
+    });
+  }
+});
+
+// Topup endpoint
+app.post('/api/topup', authenticateToken, async (req, res) => {
+  try {
+    const phone = req.user.phone;
+    const { amount } = req.body;
+    
+    // Validate required fields
+    if (!amount) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Jumlah topup harus diisi'
+      });
+    }
+    
+    // Validate amount is a positive number
+    const topupAmount = parseInt(amount);
+    if (isNaN(topupAmount) || topupAmount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Jumlah topup harus berupa angka positif'
+      });
+    }
+    
+    // Check if user exists
+    const [users] = await pool.query(
+      'SELECT * FROM users WHERE phone = ?',
+      [phone]
+    );
+    
+    if (users.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Pengguna tidak ditemukan'
+      });
+    }
+    
+    const user = users[0];
+    const currentBalance = parseInt(user.balance);
+    const newBalance = currentBalance + topupAmount;
+    
+    // Begin transaction
+    const connection = await pool.getConnection();
+    await connection.beginTransaction();
+    
+    try {
+      // Update user's balance
+      await connection.query(
+        'UPDATE users SET balance = ? WHERE phone = ?',
+        [newBalance, phone]
+      );
+      
+      // Create income record for topup
+      const currentDate = new Date().toISOString().split('T')[0]; // Format: YYYY-MM-DD
+      await connection.query(
+        'INSERT INTO income (amount, phone, sender_phone, type, date, message) VALUES (?, ?, ?, ?, ?, ?)',
+        [topupAmount, phone, phone, 'topup', currentDate, 'Top up saldo']
+      );
+      
+      // Commit transaction
+      await connection.commit();
+      
+      res.json({
+        success: true,
+        message: 'Top up berhasil',
+        data: {
+          topupAmount: topupAmount.toString(),
+          newBalance: newBalance.toString(),
+          date: currentDate
+        }
+      });
+    } catch (error) {
+      // Rollback in case of error
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  } catch (error) {
+    console.error('Topup error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Gagal melakukan top up' 
+    });
+  }
+});
+
+// Recent transactions endpoint
+app.get('/api/recent-transactions', authenticateToken, async (req, res) => {
+  try {
+    const phone = req.user.phone;
+    
+    // Get recent income transactions with sender names
+    const [incomeRecords] = await pool.query(`
+      SELECT 
+        i.id,
+        i.amount, 
+        i.sender_phone, 
+        u.name AS sender_name, 
+        i.type, 
+        i.date, 
+        i.message,
+        'income' AS transaction_type
+      FROM income i
+      LEFT JOIN users u ON i.sender_phone = u.phone
+      WHERE i.phone = ?
+      ORDER BY i.date DESC, i.id DESC
+      LIMIT 5
+    `, [phone]);
+    
+    // Get recent expense transactions with receiver names
+    const [expenseRecords] = await pool.query(`
+      SELECT 
+        e.id,
+        e.amount, 
+        e.receiver_phone, 
+        u.name AS receiver_name, 
+        e.type, 
+        e.date, 
+        e.message,
+        'expense' AS transaction_type
+      FROM expense e
+      LEFT JOIN users u ON e.receiver_phone = u.phone
+      WHERE e.phone = ?
+      ORDER BY e.date DESC, e.id DESC
+      LIMIT 5
+    `, [phone]);
+    
+    // Combine and format the response data
+    const formattedIncome = incomeRecords.map(record => ({
+      id: record.id,
+      amount: record.amount.toString(),
+      otherParty: record.sender_name || 'Unknown',
+      otherPartyPhone: record.sender_phone.toString(),
+      type: record.type,
+      date: formatDate(record.date),
+      message: record.message || "",
+      transactionType: record.transaction_type
+    }));
+    
+    const formattedExpense = expenseRecords.map(record => ({
+      id: record.id,
+      amount: record.amount.toString(),
+      otherParty: record.receiver_name || 'Unknown',
+      otherPartyPhone: record.receiver_phone.toString(),
+      type: record.type,
+      date: formatDate(record.date),
+      message: record.message || "",
+      transactionType: record.transaction_type
+    }));
+    
+    // Combine both types, sort by date (most recent first), and limit to 5
+    const allTransactions = [...formattedIncome, ...formattedExpense]
+      .sort((a, b) => {
+        // Sort by date first (newest first)
+        const dateCompare = new Date(b.date) - new Date(a.date);
+        // If dates are the same, sort by ID (newest first, assuming higher ID = newer)
+        return dateCompare !== 0 ? dateCompare : b.id - a.id;
+      })
+      .slice(0, 5);
+    
+    res.json({
+      success: true,
+      data: allTransactions
+    });
+  } catch (error) {
+    console.error('Recent transactions error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Gagal mengambil data transaksi terbaru' 
+    });
+  }
+});
 
 // Initialize database and start server
 initializeDb().then(() => {
