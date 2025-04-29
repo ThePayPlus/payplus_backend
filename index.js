@@ -15,7 +15,7 @@ app.use(cookieParser());
 
 // Konfigurasi CORS - mengizinkan origin yang spesifik untuk mendukung credentials
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:5173', // Ubah ke URL frontend Anda
+  origin: '*', // Ubah ke URL frontend Anda
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true // Enable credentials (cookies, authorization headers, etc.)
