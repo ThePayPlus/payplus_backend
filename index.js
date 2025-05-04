@@ -159,12 +159,10 @@ app.post('/api/auth/login', async (req, res) => {
       maxAge: 24 * 60 * 60 * 1000 // 24 hours in milliseconds
     });
     
-    res.json({
+    res.status(200).json({
       message: 'Login berhasil',
-      data: {
         phone: user.phone,
         token // Still include token in response for client-side storage if needed
-      },
     });
   } catch (error) {
     console.error('Login error:', error);
@@ -232,11 +230,28 @@ app.get('/api/profile', authenticateToken, async (req, res) => {
       return res.status(404).json({ message: 'Pengguna tidak ditemukan.' });
     }
     
+    // Mendapatkan total income
+    const [incomeResult] = await pool.query(
+      'SELECT SUM(amount) as total_income FROM income WHERE phone = ?',
+      [phone]
+    );
+    
+    // Mendapatkan total expense
+    const [expenseResult] = await pool.query(
+      'SELECT SUM(amount) as total_expense FROM expense WHERE phone = ?',
+      [phone]
+    );
+    
+    const totalIncome = incomeResult[0].total_income || 0;
+    const totalExpense = expenseResult[0].total_expense || 0;
+    
     res.json({
       phone: rows[0].phone,
       name: rows[0].name,
       email: rows[0].email,
-      balance: parseFloat(rows[0].balance)
+      balance: parseFloat(rows[0].balance),
+      total_income: parseFloat(totalIncome),
+      total_expense: parseFloat(totalExpense)
     });
   } catch (error) {
     console.error('Profile error:', error);
@@ -833,62 +848,110 @@ app.get('/api/income-record', authenticateToken, async (req, res) => {
   try {
     const phone = req.user.phone;
     
-    // Join income table with users table to get sender names
-    const [incomeRecords] = await pool.query(`
-      SELECT 
+    // Get income records for the user
+    const [incomeRecords] = await pool.query(
+      `SELECT 
+        i.id, 
         i.amount, 
         i.sender_phone, 
-        u.name AS sender, 
+        u.name as sender_name,
         i.type, 
         i.date, 
         i.message
       FROM income i
       LEFT JOIN users u ON i.sender_phone = u.phone
       WHERE i.phone = ?
-      ORDER BY i.date DESC
-    `, [phone]);
-    
-    // Get summary statistics
-    const [summaryResults] = await pool.query(`
-      SELECT 
-        SUM(amount) as total_income,
-        COUNT(*) as total_transactions,
-        SUM(CASE WHEN type = 'normal' THEN amount ELSE 0 END) as total_normal,
-        SUM(CASE WHEN type = 'gift' THEN amount ELSE 0 END) as total_gift,
-        SUM(CASE WHEN type = 'topup' THEN amount ELSE 0 END) as total_topup,
-        COUNT(CASE WHEN type = 'normal' THEN 1 END) as count_normal,
-        COUNT(CASE WHEN type = 'gift' THEN 1 END) as count_gift,
-        COUNT(CASE WHEN type = 'topup' THEN 1 END) as count_topup
-      FROM income
-      WHERE phone = ?
-    `, [phone]);
-    
-    const summary = {
-      total_income: summaryResults[0].total_income ? parseInt(summaryResults[0].total_income).toString() : "0",
-      total_transactions: summaryResults[0].total_transactions,
-      total_normal: summaryResults[0].total_normal ? parseInt(summaryResults[0].total_normal).toString() : "0",
-      total_gift: summaryResults[0].total_gift ? parseInt(summaryResults[0].total_gift).toString() : "0",
-      total_topup: summaryResults[0].total_topup ? parseInt(summaryResults[0].total_topup).toString() : "0",
-      count_normal: summaryResults[0].count_normal || 0,
-      count_gift: summaryResults[0].count_gift || 0,
-      count_topup: summaryResults[0].count_topup || 0
-    };
+      ORDER BY i.date DESC`,
+      [phone]
+    );
     
     // Format the response data
     const formattedRecords = incomeRecords.map(record => ({
-      amount: record.amount.toString(),
-      sender: record.sender || 'Unknown', // Handle case where sender might not be in users table
-      type: record.type,
+      id: record.id,
+      amount: record.amount ? parseInt(record.amount).toString() : "0",
+      sender_phone: record.sender_phone ? record.sender_phone.toString() : "",
+      sender_name: record.sender_name || "Unknown",
+      type: record.type || "normal",
+      date: record.date || new Date().toISOString().split('T')[0],
       message: record.message || ""
     }));
     
     res.json({
-      summary: summary,
+      success: true,
+      message: 'Data pemasukan berhasil diambil',
       records: formattedRecords
     });
   } catch (error) {
     console.error('Get income records error:', error);
-    res.status(500).json({ message: 'Gagal mengambil data riwayat pendapatan' });
+    res.status(500).json({ 
+      success: false,
+      message: 'Gagal mengambil data pemasukan' 
+    });
+  }
+});
+
+// Income Record Summary endpoint
+app.get('/api/income-record-summary', authenticateToken, async (req, res) => {
+  try {
+    const phone = req.user.phone;
+    
+    // Get total income
+    const [totalResult] = await pool.query(
+      'SELECT SUM(amount) as total_income FROM income WHERE phone = ?',
+      [phone]
+    );
+    
+    // Get income by type
+    const [incomeByType] = await pool.query(
+      'SELECT type, SUM(amount) as total FROM income WHERE phone = ? GROUP BY type',
+      [phone]
+    );
+    
+    // Get total transactions count
+    const [transactionCount] = await pool.query(
+      'SELECT COUNT(*) as total_transactions FROM income WHERE phone = ?',
+      [phone]
+    );
+    
+    // Format the response
+    const totalIncome = totalResult[0].total_income || 0;
+    
+    // Initialize with default values
+    let normalIncome = 0;
+    let giftIncome = 0;
+    let topupIncome = 0;
+    
+    // Map the income by type
+    incomeByType.forEach(item => {
+      switch(item.type) {
+        case 'normal':
+          normalIncome = parseFloat(item.total);
+          break;
+        case 'gift':
+          giftIncome = parseFloat(item.total);
+          break;
+        case 'topup':
+          topupIncome = parseFloat(item.total);
+          break;
+      }
+    });
+    
+    res.json({
+      success: true,
+      data: {
+        total_income: totalIncome.toString(),
+        normal_income: normalIncome.toString(),
+        gift_income: giftIncome.toString(),
+        topup_income: topupIncome.toString(),
+        total_transactions: transactionCount[0].total_transactions
+      }
+    });
+  } catch (error) {
+    console.error('Get income record summary error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Gagal mengambil data ringkasan pendapatan' 
+    });
   }
 });
 
