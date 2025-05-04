@@ -141,6 +141,7 @@ async function insertSampleData(connection) {
     const hashedPassword3 = await bcrypt.hash('3168', saltRounds);
     const hashedPassword4 = await bcrypt.hash('3187', saltRounds);
     const hashedPassword5 = await bcrypt.hash('3393', saltRounds);
+    const hashedPassword6 = await bcrypt.hash('0221', saltRounds); // Password baru untuk Georgio
     
     // Insert sample users with hashed passwords - removed role field
     await connection.query(`
@@ -149,8 +150,9 @@ async function insertSampleData(connection) {
       (6281301220310, 'Bryant Jonathan', 'bryant@gmail.com', ?, 6700000),
       (6281301223168, 'Andre Aditya Amann', 'andre@gmail.com', ?, 5000000),
       (6281301223187, 'Zaidaan Afif', 'zaidaan@gmail.com', ?, 3000000),
-      (6281301223393, 'Rafi Suwardana', 'rafisuwardana@gmail.com', ?, 8000000)
-    `, [hashedPassword1, hashedPassword2, hashedPassword3, hashedPassword4, hashedPassword5]);
+      (6281301223393, 'Rafi Suwardana', 'rafisuwardana@gmail.com', ?, 8000000),
+      (6281301220221, 'Georgio Armando', 'georgio@gmail.com', ?, 8888888)
+    `, [hashedPassword1, hashedPassword2, hashedPassword3, hashedPassword4, hashedPassword5, hashedPassword6]);
     console.log('Sample users created with hashed passwords');
     
     // Insert sample savings
