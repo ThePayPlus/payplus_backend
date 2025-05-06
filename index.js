@@ -886,10 +886,67 @@ app.get('/api/income-record', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('Get income records error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Gagal mengambil data pemasukan',
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Add income record
+app.post('/api/income-record', authenticateToken, async (req, res) => {
+  try {
+    const userPhone = req.user.phone;
+    const { amount, senderPhone, type, message } = req.body;
+
+    // Validasi input
+    if (!amount || !senderPhone || !type) {
+      return res.status(400).json({
+        message: 'Data tidak lengkap. Amount, senderPhone, dan type diperlukan'
+      });
+    }
+
+    // Validasi tipe income
+    if (!['normal', 'gift', 'topup'].includes(type)) {
+      return res.status(400).json({
+        message: 'Tipe income tidak valid. Pilih normal, gift, atau topup'
+      });
+    }
+
+    // Validasi pengirim ada di database
+    const [senderExists] = await pool.query('SELECT * FROM users WHERE phone = ?', [senderPhone]);
+    if (senderExists.length === 0) {
+      return res.status(404).json({
+        message: 'Pengirim dengan nomor telepon tersebut tidak ditemukan'
+      });
+    }
+
+    // Tanggal saat ini
+    const currentDate = new Date().toISOString().split('T')[0]; // Format YYYY-MM-DD
+
+    // Tambahkan record income baru
+    const [result] = await pool.query(
+      'INSERT INTO income (amount, phone, sender_phone, type, date, message) VALUES (?, ?, ?, ?, ?, ?)',
+      [amount, userPhone, senderPhone, type, currentDate, message || null]
+    );
+
+    // Update saldo pengguna
+    await pool.query(
+      'UPDATE users SET balance = balance + ? WHERE phone = ?',
+      [amount, userPhone]
+    );
+
+    res.status(201).json({
+      message: 'Income berhasil ditambahkan',
+      data: {
+        id: result.insertId,
+        amount: parseFloat(amount),
+        date: currentDate,
+        type: type,
+        senderPhone: senderPhone.toString(),
+        message: message || null
+      }
     });
+  } catch (error) {
+    console.error('Add income record error:', error);
+    res.status(500).json({ message: 'Server error' });
   }
 });
 
@@ -1012,6 +1069,114 @@ app.get('/api/expense-record', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Get expense records error:', error);
     res.status(500).json({ message: 'Gagal mengambil data riwayat pengeluaran' });
+  }
+});
+
+// Add expense record
+app.post('/api/expense-record', authenticateToken, async (req, res) => {
+  try {
+    const userPhone = req.user.phone;
+    const { amount, receiverPhone, type, message } = req.body;
+
+    // Validasi input
+    if (!amount || !receiverPhone || !type) {
+      return res.status(400).json({
+        message: 'Jumlah, nomor telepon penerima, dan tipe transaksi diperlukan'
+      });
+    }
+
+    // Validasi tipe transaksi
+    if (!['normal', 'gift'].includes(type)) {
+      return res.status(400).json({
+        message: 'Tipe transaksi harus berupa "normal" atau "gift"'
+      });
+    }
+
+    // Validasi jumlah harus positif
+    if (amount <= 0) {
+      return res.status(400).json({
+        message: 'Jumlah harus lebih dari 0'
+      });
+    }
+
+    // Cek apakah penerima ada di database
+    const [receiverExists] = await pool.query('SELECT * FROM users WHERE phone = ?', [receiverPhone]);
+
+    if (receiverExists.length === 0) {
+      return res.status(404).json({
+        message: 'Penerima dengan nomor telepon tersebut tidak ditemukan'
+      });
+    }
+
+    // Cek saldo pengirim
+    const [senderData] = await pool.query('SELECT balance FROM users WHERE phone = ?', [userPhone]);
+    
+    if (senderData[0].balance < amount) {
+      return res.status(400).json({
+        message: 'Saldo tidak mencukupi untuk melakukan transaksi ini'
+      });
+    }
+
+    // Mulai transaksi database
+    const connection = await pool.getConnection();
+    await connection.beginTransaction();
+
+    try {
+      // Tanggal saat ini untuk transaksi
+      const currentDate = new Date().toISOString().split('T')[0]; // Format YYYY-MM-DD
+
+      // Catat pengeluaran (expense)
+      const [expenseResult] = await connection.query(
+        'INSERT INTO expense (amount, phone, receiver_phone, type, date, message) VALUES (?, ?, ?, ?, ?, ?)',
+        [amount, userPhone, receiverPhone, type, currentDate, message || null]
+      );
+
+      // Catat pemasukan (income) untuk penerima
+      await connection.query(
+        'INSERT INTO income (amount, phone, sender_phone, type, date, message) VALUES (?, ?, ?, ?, ?, ?)',
+        [amount, receiverPhone, userPhone, type, currentDate, message || null]
+      );
+
+      // Update saldo pengirim (kurangi)
+      await connection.query(
+        'UPDATE users SET balance = balance - ? WHERE phone = ?',
+        [amount, userPhone]
+      );
+
+      // Update saldo penerima (tambah)
+      await connection.query(
+        'UPDATE users SET balance = balance + ? WHERE phone = ?',
+        [amount, receiverPhone]
+      );
+
+      // Commit transaksi
+      await connection.commit();
+
+      // Ambil data penerima untuk response
+      const [receiverData] = await pool.query('SELECT name FROM users WHERE phone = ?', [receiverPhone]);
+
+      res.status(201).json({
+        message: 'Transaksi berhasil',
+        data: {
+          id: expenseResult.insertId,
+          amount: amount,
+          date: currentDate,
+          type: type,
+          receiver_phone: receiverPhone,
+          message: message || null
+        }
+      });
+    } catch (error) {
+      // Rollback jika terjadi error
+      await connection.rollback();
+      throw error;
+    } finally {
+      // Lepaskan koneksi
+      connection.release();
+    }
+  } catch (error) {
+    console.error('Expense record error:', error);
+    res.status(500).json({ message: 'Server error' });
   }
 });
 
