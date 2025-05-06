@@ -14,19 +14,21 @@ app.use(express.json());
 app.use(cookieParser());
 
 // Konfigurasi CORS - mengizinkan origin yang spesifik untuk mendukung credentials
-app.use(cors({
-  origin: '*', // Ubah ke URL frontend Anda
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true // Enable credentials (cookies, authorization headers, etc.)
-}));
+app.use(
+  cors({
+    origin: '*', // Ubah ke URL frontend Anda
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true, // Enable credentials (cookies, authorization headers, etc.)
+  })
+);
 
 // Database connection
 const dbConfig = {
   host: process.env.DB_HOST || 'localhost',
   user: process.env.DB_USER || 'root',
   password: process.env.DB_PASSWORD || '',
-  database: process.env.DB_NAME || 'payplus'
+  database: process.env.DB_NAME || 'payplus',
 };
 
 let pool;
@@ -46,48 +48,48 @@ async function initializeDb() {
 const authenticateToken = (req, res, next) => {
   // Check cookie first, then fallback to header
   let token = null;
-  
+
   // Try to get token from cookie
   if (req.cookies && req.cookies.token) {
     token = req.cookies.token;
     console.log('Using token from cookie');
-  } 
+  }
   // Fallback to Authorization header
   else {
     const authHeader = req.headers['authorization'];
     console.log('Auth Header:', authHeader);
-    
+
     if (authHeader) {
       token = authHeader.split(' ')[1];
       console.log('Using token from Authorization header');
     }
   }
-  
+
   // No token found in either cookie or header
   if (!token) {
-    return res.status(401).json({ 
-      message: 'Authentication token required', 
-      details: 'No token found in cookie or Authorization header' 
+    return res.status(401).json({
+      message: 'Authentication token required',
+      details: 'No token found in cookie or Authorization header',
     });
   }
-  
+
   jwt.verify(token, process.env.JWT_SECRET || 'payplus_secret_key', (err, decoded) => {
     if (err) {
       console.log('Token verification error:', err);
-      return res.status(403).json({ 
+      return res.status(403).json({
         message: 'Invalid or expired token',
-        details: err.message 
+        details: err.message,
       });
     }
-    
+
     // Ensure the decoded token contains phone
     if (!decoded.phone) {
-      return res.status(403).json({ 
+      return res.status(403).json({
         message: 'Invalid token format',
-        details: 'Token does not contain phone number information'
+        details: 'Token does not contain phone number information',
       });
     }
-    
+
     console.log('Auth successful for user:', decoded.phone);
     req.user = { phone: decoded.phone };
     next();
@@ -101,25 +103,22 @@ const authenticateToken = (req, res, next) => {
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { phone, password } = req.body;
-    
+
     if (!phone || !password) {
       return res.status(400).json({ message: 'Nomor telepon dan password diperlukan' });
     }
-    
-    const [rows] = await pool.query(
-      'SELECT * FROM users WHERE phone = ?',
-      [phone]
-    );
-    
+
+    const [rows] = await pool.query('SELECT * FROM users WHERE phone = ?', [phone]);
+
     if (rows.length === 0) {
       return res.status(401).json({ message: 'Login gagal. Nomor telepon atau password salah.' });
     }
-    
+
     const user = rows[0];
-    
+
     // Check if the password is already hashed
     const isHashed = user.password.startsWith('$2b$') || user.password.startsWith('$2a$');
-    
+
     let isPasswordValid = false;
     if (isHashed) {
       // Compare with hashed password
@@ -127,42 +126,35 @@ app.post('/api/auth/login', async (req, res) => {
     } else {
       // For backward compatibility - direct comparison
       isPasswordValid = user.password === password;
-      
+
       // Update to hashed password if it matches
       if (isPasswordValid) {
         const saltRounds = 10;
         const hashedPassword = await bcrypt.hash(password, saltRounds);
-        await pool.query(
-          'UPDATE users SET password = ? WHERE phone = ?',
-          [hashedPassword, phone]
-        );
+        await pool.query('UPDATE users SET password = ? WHERE phone = ?', [hashedPassword, phone]);
         console.log(`Password hashed for user ${phone}`);
       }
     }
-    
+
     if (!isPasswordValid) {
       return res.status(401).json({ message: 'Login gagal. Nomor telepon atau password salah.' });
     }
-    
+
     // Generate JWT token
-    const token = jwt.sign(
-      { phone: user.phone },
-      process.env.JWT_SECRET || 'payplus_secret_key',
-      { expiresIn: '24h' }
-    );
-    
+    const token = jwt.sign({ phone: user.phone }, process.env.JWT_SECRET || 'payplus_secret_key', { expiresIn: '24h' });
+
     // Set the token as a cookie
     res.cookie('token', token, {
       httpOnly: true, // Prevents JavaScript access to the cookie
       secure: process.env.NODE_ENV === 'production', // Use secure in production
       sameSite: 'lax', // Helps prevent CSRF
-      maxAge: 24 * 60 * 60 * 1000 // 24 hours in milliseconds
+      maxAge: 24 * 60 * 60 * 1000, // 24 hours in milliseconds
     });
-    
+
     res.status(200).json({
       message: 'Login berhasil',
-        phone: user.phone,
-        token // Still include token in response for client-side storage if needed
+      phone: user.phone,
+      token, // Still include token in response for client-side storage if needed
     });
   } catch (error) {
     console.error('Login error:', error);
@@ -180,38 +172,121 @@ app.post('/api/auth/logout', (req, res) => {
 app.post('/api/auth/register', async (req, res) => {
   try {
     const { phone, name, email, password } = req.body;
-    
+
     if (!phone || !name || !email || !password) {
-      return res.status(400).json({ 
-        message: 'Semua kolom (phone, name, email, password) harus diisi' 
+      return res.status(400).json({
+        message: 'Semua kolom (phone, name, email, password) harus diisi',
       });
     }
-    
+
     // Check if user already exists
-    const [existingUsers] = await pool.query(
-      'SELECT * FROM users WHERE phone = ?',
-      [phone]
-    );
-    
+    const [existingUsers] = await pool.query('SELECT * FROM users WHERE phone = ?', [phone]);
+
     if (existingUsers.length > 0) {
-      return res.status(400).json({ 
-        message: 'Registrasi gagal. Nomor telepon sudah terdaftar.' 
+      return res.status(400).json({
+        message: 'Registrasi gagal. Nomor telepon sudah terdaftar.',
       });
     }
-    
+
     // Hash password
     const saltRounds = 10;
     const hashedPassword = await bcrypt.hash(password, saltRounds);
-    
+
     // Insert new user with hashed password
-    await pool.query(
-      'INSERT INTO users (phone, name, email, password, balance) VALUES (?, ?, ?, ?, ?)',
-      [phone, name, email, hashedPassword, 0]
-    );
-    
+    await pool.query('INSERT INTO users (phone, name, email, password, balance) VALUES (?, ?, ?, ?, ?)', [phone, name, email, hashedPassword, 0]);
+
     res.status(201).json({ message: 'Registrasi berhasil' });
   } catch (error) {
     console.error('Register error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ... existing code ...
+
+// Friends endpoints
+// Add friend
+app.post('/api/friends', authenticateToken, async (req, res) => {
+  try {
+    const userPhone = req.user.phone;
+    const { friendPhone } = req.body;
+
+    if (!friendPhone) {
+      return res.status(400).json({ message: 'Nomor telepon teman diperlukan' });
+    }
+
+    // Validasi format nomor telepon
+    if (!/^\d+$/.test(friendPhone)) {
+      return res.status(400).json({ message: 'Format nomor telepon tidak valid' });
+    }
+
+    // Cek apakah nomor telepon teman ada di database
+    const [friendExists] = await pool.query('SELECT * FROM users WHERE phone = ?', [friendPhone]);
+
+    if (friendExists.length === 0) {
+      return res.status(404).json({ message: 'Pengguna dengan nomor telepon tersebut tidak ditemukan' });
+    }
+
+    // Cek apakah mencoba menambahkan diri sendiri
+    if (userPhone === friendPhone) {
+      return res.status(400).json({ message: 'Anda tidak dapat menambahkan diri sendiri sebagai teman' });
+    }
+
+    // Cek apakah pertemanan sudah ada
+    const [existingFriendship] = await pool.query('SELECT * FROM friends WHERE (user_phone = ? AND friend_phone = ?) OR (user_phone = ? AND friend_phone = ?)', [userPhone, friendPhone, friendPhone, userPhone]);
+
+    if (existingFriendship.length > 0) {
+      const friendship = existingFriendship[0];
+
+      if (friendship.status === 'accepted') {
+        return res.status(400).json({ message: 'Pengguna ini sudah menjadi teman Anda' });
+      } else if (friendship.status === 'pending') {
+        return res.status(400).json({ message: 'Permintaan pertemanan sudah dikirim sebelumnya' });
+      } else if (friendship.status === 'rejected') {
+        // Jika ditolak sebelumnya, bisa mencoba lagi
+        await pool.query('UPDATE friends SET status = "pending", updated_at = NOW() WHERE id = ?', [friendship.id]);
+        return res.status(200).json({ message: 'Permintaan pertemanan berhasil dikirim' });
+      }
+    }
+
+    // Tambahkan pertemanan baru
+    await pool.query('INSERT INTO friends (user_phone, friend_phone, status) VALUES (?, ?, "pending")', [userPhone, friendPhone]);
+
+    res.status(201).json({ message: 'Permintaan pertemanan berhasil dikirim' });
+  } catch (error) {
+    console.error('Add friend error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Get friends list
+app.get('/api/friends', authenticateToken, async (req, res) => {
+  try {
+    const userPhone = req.user.phone;
+
+    // Ambil daftar teman yang sudah diterima
+    const [friends] = await pool.query(
+      `
+      SELECT u.phone, u.name, u.email, f.status, f.created_at
+      FROM friends f
+      JOIN users u ON (f.friend_phone = u.phone)
+      WHERE f.user_phone = ? AND f.status = 'accepted'
+      UNION
+      SELECT u.phone, u.name, u.email, f.status, f.created_at
+      FROM friends f
+      JOIN users u ON (f.user_phone = u.phone)
+      WHERE f.friend_phone = ? AND f.status = 'accepted'
+      ORDER BY created_at DESC
+    `,
+      [userPhone, userPhone]
+    );
+
+    res.status(200).json({
+      message: 'Daftar teman berhasil diambil',
+      friends: friends,
+    });
+  } catch (error) {
+    console.error('Get friends error:', error);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -220,38 +295,29 @@ app.post('/api/auth/register', async (req, res) => {
 app.get('/api/profile', authenticateToken, async (req, res) => {
   try {
     const phone = req.user.phone;
-    
-    const [rows] = await pool.query(
-      'SELECT phone, name, email, balance FROM users WHERE phone = ?',
-      [phone]
-    );
-    
+
+    const [rows] = await pool.query('SELECT phone, name, email, balance FROM users WHERE phone = ?', [phone]);
+
     if (rows.length === 0) {
       return res.status(404).json({ message: 'Pengguna tidak ditemukan.' });
     }
-    
+
     // Mendapatkan total income
-    const [incomeResult] = await pool.query(
-      'SELECT SUM(amount) as total_income FROM income WHERE phone = ?',
-      [phone]
-    );
-    
+    const [incomeResult] = await pool.query('SELECT SUM(amount) as total_income FROM income WHERE phone = ?', [phone]);
+
     // Mendapatkan total expense
-    const [expenseResult] = await pool.query(
-      'SELECT SUM(amount) as total_expense FROM expense WHERE phone = ?',
-      [phone]
-    );
-    
+    const [expenseResult] = await pool.query('SELECT SUM(amount) as total_expense FROM expense WHERE phone = ?', [phone]);
+
     const totalIncome = incomeResult[0].total_income || 0;
     const totalExpense = expenseResult[0].total_expense || 0;
-    
+
     res.json({
       phone: rows[0].phone,
       name: rows[0].name,
       email: rows[0].email,
       balance: parseFloat(rows[0].balance),
       total_income: parseFloat(totalIncome),
-      total_expense: parseFloat(totalExpense)
+      total_expense: parseFloat(totalExpense),
     });
   } catch (error) {
     console.error('Profile error:', error);
@@ -264,57 +330,51 @@ app.patch('/api/profile', authenticateToken, async (req, res) => {
   try {
     const phone = req.user.phone;
     const { name, email } = req.body;
-    
+
     // Validate that at least one field is provided
     if (!name && !email) {
-      return res.status(400).json({ 
-        message: 'Setidaknya satu field (name atau email) harus diisi untuk update' 
+      return res.status(400).json({
+        message: 'Setidaknya satu field (name atau email) harus diisi untuk update',
       });
     }
-    
+
     // Check if user exists
-    const [userCheck] = await pool.query(
-      'SELECT * FROM users WHERE phone = ?',
-      [phone]
-    );
-    
+    const [userCheck] = await pool.query('SELECT * FROM users WHERE phone = ?', [phone]);
+
     if (userCheck.length === 0) {
       return res.status(404).json({ message: 'Pengguna tidak ditemukan.' });
     }
-    
+
     // Build update query dynamically based on provided fields
     let updateQuery = 'UPDATE users SET ';
     const updateValues = [];
-    
+
     if (name) {
       updateQuery += 'name = ?';
       updateValues.push(name);
     }
-    
+
     if (email) {
       if (name) updateQuery += ', '; // Add comma if name was added
       updateQuery += 'email = ?';
       updateValues.push(email);
     }
-    
+
     updateQuery += ' WHERE phone = ?';
     updateValues.push(phone);
-    
+
     // Execute update query
     await pool.query(updateQuery, updateValues);
-    
+
     // Get updated user data
-    const [updatedUser] = await pool.query(
-      'SELECT phone, name, email, balance FROM users WHERE phone = ?',
-      [phone]
-    );
-    
+    const [updatedUser] = await pool.query('SELECT phone, name, email, balance FROM users WHERE phone = ?', [phone]);
+
     res.json({
       message: 'Profil berhasil diperbarui',
       data: {
         name: updatedUser[0].name,
         email: updatedUser[0].email,
-      }
+      },
     });
   } catch (error) {
     console.error('Update profile error:', error);
@@ -327,37 +387,34 @@ app.patch('/api/change-password', authenticateToken, async (req, res) => {
   try {
     const phone = req.user.phone;
     const { oldPassword, newPassword } = req.body;
-    
+
     // Validate request
     if (!oldPassword || !newPassword) {
-      return res.status(400).json({ 
-        message: 'Password lama dan password baru harus diisi' 
+      return res.status(400).json({
+        message: 'Password lama dan password baru harus diisi',
       });
     }
-    
+
     // Check if new password meets requirements
     if (newPassword.length < 6) {
-      return res.status(400).json({ 
-        message: 'Password baru harus minimal 6 karakter' 
+      return res.status(400).json({
+        message: 'Password baru harus minimal 6 karakter',
       });
     }
-    
+
     // Get user data to verify old password
-    const [users] = await pool.query(
-      'SELECT * FROM users WHERE phone = ?',
-      [phone]
-    );
-    
+    const [users] = await pool.query('SELECT * FROM users WHERE phone = ?', [phone]);
+
     if (users.length === 0) {
       return res.status(404).json({ message: 'Pengguna tidak ditemukan' });
     }
-    
+
     const user = users[0];
-    
+
     // Verify old password
     const isHashed = user.password.startsWith('$2b$') || user.password.startsWith('$2a$');
     let isOldPasswordValid = false;
-    
+
     if (isHashed) {
       // Compare with hashed password
       isOldPasswordValid = await bcrypt.compare(oldPassword, user.password);
@@ -365,21 +422,18 @@ app.patch('/api/change-password', authenticateToken, async (req, res) => {
       // Direct comparison for legacy passwords
       isOldPasswordValid = user.password === oldPassword;
     }
-    
+
     if (!isOldPasswordValid) {
       return res.status(401).json({ message: 'Password lama tidak valid' });
     }
-    
+
     // Hash new password
     const saltRounds = 10;
     const hashedNewPassword = await bcrypt.hash(newPassword, saltRounds);
-    
+
     // Update password
-    await pool.query(
-      'UPDATE users SET password = ? WHERE phone = ?',
-      [hashedNewPassword, phone]
-    );
-    
+    await pool.query('UPDATE users SET password = ? WHERE phone = ?', [hashedNewPassword, phone]);
+
     res.json({ message: 'Password berhasil diubah' });
   } catch (error) {
     console.error('Change password error:', error);
@@ -392,41 +446,35 @@ app.post('/api/savings', authenticateToken, async (req, res) => {
   try {
     const phone = req.user.phone;
     const { nama, deskripsi, target, terkumpul = 0 } = req.body;
-    
+
     if (!nama || !target) {
-      return res.status(400).json({ 
-        message: 'Kolom nama dan target harus diisi' 
+      return res.status(400).json({
+        message: 'Kolom nama dan target harus diisi',
       });
     }
-    
+
     // Insert the new savings record
-    const [result] = await pool.query(
-      'INSERT INTO savings (phone, nama, deskripsi, target, terkumpul) VALUES (?, ?, ?, ?, ?)',
-      [phone, nama, deskripsi, target, terkumpul]
-    );
-    
+    const [result] = await pool.query('INSERT INTO savings (phone, nama, deskripsi, target, terkumpul) VALUES (?, ?, ?, ?, ?)', [phone, nama, deskripsi, target, terkumpul]);
+
     // Get the inserted savings record to return in response
-    const [newSavings] = await pool.query(
-      'SELECT id, nama, deskripsi, target, terkumpul FROM savings WHERE id = ?',
-      [result.insertId]
-    );
-    
-    res.status(201).json({ 
+    const [newSavings] = await pool.query('SELECT id, nama, deskripsi, target, terkumpul FROM savings WHERE id = ?', [result.insertId]);
+
+    res.status(201).json({
       success: true,
       message: 'Tabungan berhasil ditambahkan',
       data: {
         id: newSavings[0].id,
         nama: newSavings[0].nama,
-        deskripsi: newSavings[0].deskripsi || "",
+        deskripsi: newSavings[0].deskripsi || '',
         target: newSavings[0].target.toString(),
-        terkumpul: newSavings[0].terkumpul.toString()
-      }
+        terkumpul: newSavings[0].terkumpul.toString(),
+      },
     });
   } catch (error) {
     console.error('Create savings error:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
-      message: 'Gagal menambahkan tabungan'
+      message: 'Gagal menambahkan tabungan',
     });
   }
 });
@@ -434,30 +482,24 @@ app.post('/api/savings', authenticateToken, async (req, res) => {
 app.get('/api/savings/summary', authenticateToken, async (req, res) => {
   try {
     const phone = req.user.phone;
-    
+
     // Check if user exists
-    const [users] = await pool.query(
-      'SELECT * FROM users WHERE phone = ?',
-      [phone]
-    );
-    
+    const [users] = await pool.query('SELECT * FROM users WHERE phone = ?', [phone]);
+
     if (users.length === 0) {
       return res.status(404).json({ message: 'Pengguna tidak ditemukan' });
     }
-    
+
     // Get savings summary
-    const [result] = await pool.query(
-      'SELECT SUM(target) as total_target, SUM(terkumpul) as total_terkumpul FROM savings WHERE phone = ?',
-      [phone]
-    );
-    
+    const [result] = await pool.query('SELECT SUM(target) as total_target, SUM(terkumpul) as total_terkumpul FROM savings WHERE phone = ?', [phone]);
+
     if (!result[0].total_target) {
       return res.json({ total_target: 0, total_terkumpul: 0 });
     }
-    
+
     res.json({
       total_target: parseFloat(result[0].total_target),
-      total_terkumpul: parseFloat(result[0].total_terkumpul || 0)
+      total_terkumpul: parseFloat(result[0].total_terkumpul || 0),
     });
   } catch (error) {
     console.error('Get savings summary error:', error);
@@ -469,18 +511,22 @@ app.get('/api/savings/summary', authenticateToken, async (req, res) => {
 app.get('/api/savings', authenticateToken, async (req, res) => {
   try {
     const phone = req.user.phone;
-    
+
     // Get summary of all savings
-    const [summaryResult] = await pool.query(`
+    const [summaryResult] = await pool.query(
+      `
       SELECT 
         SUM(target) as total_target,
         SUM(terkumpul) as total_terkumpul
       FROM savings 
       WHERE phone = ?
-    `, [phone]);
-    
+    `,
+      [phone]
+    );
+
     // Get all savings records
-    const [savingsRecords] = await pool.query(`
+    const [savingsRecords] = await pool.query(
+      `
       SELECT 
         id,
         nama as namaSavings,
@@ -490,25 +536,27 @@ app.get('/api/savings', authenticateToken, async (req, res) => {
       FROM savings
       WHERE phone = ?
       ORDER BY id ASC
-    `, [phone]);
-    
+    `,
+      [phone]
+    );
+
     // Format the response data
     const summary = {
-      total_target: summaryResult[0].total_target ? parseInt(summaryResult[0].total_target).toString() : "0",
-      total_terkumpul: summaryResult[0].total_terkumpul ? parseInt(summaryResult[0].total_terkumpul).toString() : "0"
+      total_target: summaryResult[0].total_target ? parseInt(summaryResult[0].total_target).toString() : '0',
+      total_terkumpul: summaryResult[0].total_terkumpul ? parseInt(summaryResult[0].total_terkumpul).toString() : '0',
     };
-    
-    const formattedRecords = savingsRecords.map(record => ({
+
+    const formattedRecords = savingsRecords.map((record) => ({
       id: record.id,
       namaSavings: record.namaSavings,
-      deskripsi: record.deskripsi || "",
+      deskripsi: record.deskripsi || '',
       target: record.target.toString(),
-      terkumpul: record.terkumpul.toString()
+      terkumpul: record.terkumpul.toString(),
     }));
-    
+
     res.json({
       summary: summary,
-      records: formattedRecords
+      records: formattedRecords,
     });
   } catch (error) {
     console.error('Get savings error:', error);
@@ -522,25 +570,22 @@ app.patch('/api/savings/:id', authenticateToken, async (req, res) => {
     const phone = req.user.phone;
     const savingsId = req.params.id;
     const { terkumpul } = req.body;
-    
+
     // Validate input
     if (terkumpul === undefined) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         success: false,
-        message: 'Nilai terkumpul harus diisi' 
+        message: 'Nilai terkumpul harus diisi',
       });
     }
-    
+
     // Check if the savings record exists and belongs to the user
-    const [savings] = await pool.query(
-      'SELECT * FROM savings WHERE id = ? AND phone = ?',
-      [savingsId, phone]
-    );
-    
+    const [savings] = await pool.query('SELECT * FROM savings WHERE id = ? AND phone = ?', [savingsId, phone]);
+
     if (savings.length === 0) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
-        message: 'Data tabungan tidak ditemukan atau bukan milik Anda' 
+        message: 'Data tabungan tidak ditemukan atau bukan milik Anda',
       });
     }
 
@@ -548,35 +593,29 @@ app.patch('/api/savings/:id', authenticateToken, async (req, res) => {
     const currentAmount = parseInt(savings[0].terkumpul);
     const additionalAmount = parseInt(terkumpul);
     const newTotalAmount = currentAmount + additionalAmount;
-    
+
     // Update with the new total
-    await pool.query(
-      'UPDATE savings SET terkumpul = ? WHERE id = ? AND phone = ?',
-      [newTotalAmount, savingsId, phone]
-    );
-    
+    await pool.query('UPDATE savings SET terkumpul = ? WHERE id = ? AND phone = ?', [newTotalAmount, savingsId, phone]);
+
     // Get the updated savings record
-    const [updatedSavings] = await pool.query(
-      'SELECT id, nama, deskripsi, target, terkumpul FROM savings WHERE id = ?',
-      [savingsId]
-    );
-    
-    res.json({ 
+    const [updatedSavings] = await pool.query('SELECT id, nama, deskripsi, target, terkumpul FROM savings WHERE id = ?', [savingsId]);
+
+    res.json({
       success: true,
       message: 'Tabungan berhasil diperbarui',
       data: {
         id: updatedSavings[0].id,
         nama: updatedSavings[0].nama,
-        deskripsi: updatedSavings[0].deskripsi || "",
+        deskripsi: updatedSavings[0].deskripsi || '',
         target: updatedSavings[0].target.toString(),
-        terkumpul: updatedSavings[0].terkumpul.toString()
-      }
+        terkumpul: updatedSavings[0].terkumpul.toString(),
+      },
     });
   } catch (error) {
     console.error('Update savings error:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
-      message: 'Gagal memperbarui tabungan' 
+      message: 'Gagal memperbarui tabungan',
     });
   }
 });
@@ -586,45 +625,39 @@ app.delete('/api/savings/:id', authenticateToken, async (req, res) => {
   try {
     const phone = req.user.phone;
     const savingsId = req.params.id;
-    
+
     // Check if the savings record exists and belongs to the user
-    const [savings] = await pool.query(
-      'SELECT * FROM savings WHERE id = ? AND phone = ?',
-      [savingsId, phone]
-    );
-    
+    const [savings] = await pool.query('SELECT * FROM savings WHERE id = ? AND phone = ?', [savingsId, phone]);
+
     if (savings.length === 0) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
-        message: 'Data tabungan tidak ditemukan atau bukan milik Anda' 
+        message: 'Data tabungan tidak ditemukan atau bukan milik Anda',
       });
     }
-    
+
     // Save the data before deletion for response
     const deletedSavings = {
       id: savings[0].id,
       nama: savings[0].nama,
-      deskripsi: savings[0].deskripsi || "",
+      deskripsi: savings[0].deskripsi || '',
       target: savings[0].target.toString(),
-      terkumpul: savings[0].terkumpul.toString()
+      terkumpul: savings[0].terkumpul.toString(),
     };
-    
+
     // Delete the savings record
-    await pool.query(
-      'DELETE FROM savings WHERE id = ? AND phone = ?',
-      [savingsId, phone]
-    );
-    
-    res.json({ 
+    await pool.query('DELETE FROM savings WHERE id = ? AND phone = ?', [savingsId, phone]);
+
+    res.json({
       success: true,
       message: 'Tabungan berhasil dihapus',
-      data: deletedSavings
+      data: deletedSavings,
     });
   } catch (error) {
     console.error('Delete savings error:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
-      message: 'Gagal menghapus tabungan' 
+      message: 'Gagal menghapus tabungan',
     });
   }
 });
@@ -635,28 +668,22 @@ app.post('/api/bills', authenticateToken, async (req, res) => {
   try {
     const phone = req.user.phone;
     const { name, amount, dueDate, category } = req.body;
-    
+
     // Validate required fields
     if (!name || !amount || !dueDate || !category) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         success: false,
-        message: 'Semua kolom (name, amount, dueDate, category) harus diisi' 
+        message: 'Semua kolom (name, amount, dueDate, category) harus diisi',
       });
     }
-    
+
     // Insert the new bill
-    const [result] = await pool.query(
-      'INSERT INTO bill (phone, name, amount, dueDate, category) VALUES (?, ?, ?, ?, ?)',
-      [phone, name, amount, dueDate, category]
-    );
-    
+    const [result] = await pool.query('INSERT INTO bill (phone, name, amount, dueDate, category) VALUES (?, ?, ?, ?, ?)', [phone, name, amount, dueDate, category]);
+
     // Get the inserted bill
-    const [newBill] = await pool.query(
-      'SELECT id, name, amount, dueDate, category FROM bill WHERE id = ?',
-      [result.insertId]
-    );
-    
-    res.status(201).json({ 
+    const [newBill] = await pool.query('SELECT id, name, amount, dueDate, category FROM bill WHERE id = ?', [result.insertId]);
+
+    res.status(201).json({
       success: true,
       message: 'Tagihan berhasil ditambahkan',
       data: {
@@ -664,14 +691,14 @@ app.post('/api/bills', authenticateToken, async (req, res) => {
         name: newBill[0].name,
         amount: newBill[0].amount.toString(),
         dueDate: newBill[0].dueDate,
-        category: newBill[0].category
-      }
+        category: newBill[0].category,
+      },
     });
   } catch (error) {
     console.error('Create bill error:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
-      message: 'Gagal menambahkan tagihan' 
+      message: 'Gagal menambahkan tagihan',
     });
   }
 });
@@ -680,13 +707,10 @@ app.post('/api/bills', authenticateToken, async (req, res) => {
 app.get('/api/bills', authenticateToken, async (req, res) => {
   try {
     const phone = req.user.phone;
-    
+
     // Get bills - the table is named 'bill' in the provided schema
-    const [bills] = await pool.query(
-      'SELECT id, name, amount, dueDate, category FROM bill WHERE phone = ?',
-      [phone]
-    );
-    
+    const [bills] = await pool.query('SELECT id, name, amount, dueDate, category FROM bill WHERE phone = ?', [phone]);
+
     res.json({ bills });
   } catch (error) {
     console.error('Get bills error:', error);
@@ -700,41 +724,32 @@ app.put('/api/bills/:id', authenticateToken, async (req, res) => {
     const phone = req.user.phone;
     const billId = req.params.id;
     const { name, amount, dueDate, category } = req.body;
-    
+
     // Validate required fields
     if (!name || !amount || !dueDate || !category) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         success: false,
-        message: 'Semua kolom (name, amount, dueDate, category) harus diisi' 
+        message: 'Semua kolom (name, amount, dueDate, category) harus diisi',
       });
     }
-    
+
     // Check if the bill exists and belongs to the user
-    const [bills] = await pool.query(
-      'SELECT * FROM bill WHERE id = ? AND phone = ?',
-      [billId, phone]
-    );
-    
+    const [bills] = await pool.query('SELECT * FROM bill WHERE id = ? AND phone = ?', [billId, phone]);
+
     if (bills.length === 0) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
-        message: 'Data tagihan tidak ditemukan atau bukan milik Anda' 
+        message: 'Data tagihan tidak ditemukan atau bukan milik Anda',
       });
     }
-    
+
     // Update the bill
-    await pool.query(
-      'UPDATE bill SET name = ?, amount = ?, dueDate = ?, category = ? WHERE id = ? AND phone = ?',
-      [name, amount, dueDate, category, billId, phone]
-    );
-    
+    await pool.query('UPDATE bill SET name = ?, amount = ?, dueDate = ?, category = ? WHERE id = ? AND phone = ?', [name, amount, dueDate, category, billId, phone]);
+
     // Get the updated bill
-    const [updatedBill] = await pool.query(
-      'SELECT id, name, amount, dueDate, category FROM bill WHERE id = ?',
-      [billId]
-    );
-    
-    res.json({ 
+    const [updatedBill] = await pool.query('SELECT id, name, amount, dueDate, category FROM bill WHERE id = ?', [billId]);
+
+    res.json({
       success: true,
       message: 'Tagihan berhasil diperbarui',
       data: {
@@ -742,14 +757,14 @@ app.put('/api/bills/:id', authenticateToken, async (req, res) => {
         name: updatedBill[0].name,
         amount: updatedBill[0].amount.toString(),
         dueDate: updatedBill[0].dueDate,
-        category: updatedBill[0].category
-      }
+        category: updatedBill[0].category,
+      },
     });
   } catch (error) {
     console.error('Update bill error:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
-      message: 'Gagal memperbarui tagihan' 
+      message: 'Gagal memperbarui tagihan',
     });
   }
 });
@@ -759,45 +774,39 @@ app.delete('/api/bills/:id', authenticateToken, async (req, res) => {
   try {
     const phone = req.user.phone;
     const billId = req.params.id;
-    
+
     // Check if the bill exists and belongs to the user
-    const [bills] = await pool.query(
-      'SELECT * FROM bill WHERE id = ? AND phone = ?',
-      [billId, phone]
-    );
-    
+    const [bills] = await pool.query('SELECT * FROM bill WHERE id = ? AND phone = ?', [billId, phone]);
+
     if (bills.length === 0) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
-        message: 'Data tagihan tidak ditemukan atau bukan milik Anda' 
+        message: 'Data tagihan tidak ditemukan atau bukan milik Anda',
       });
     }
-    
+
     // Save the data before deletion for response
     const deletedBill = {
       id: bills[0].id,
       name: bills[0].name,
       amount: bills[0].amount.toString(),
       dueDate: bills[0].dueDate,
-      category: bills[0].category
+      category: bills[0].category,
     };
-    
+
     // Delete the bill
-    await pool.query(
-      'DELETE FROM bill WHERE id = ? AND phone = ?',
-      [billId, phone]
-    );
-    
-    res.json({ 
+    await pool.query('DELETE FROM bill WHERE id = ? AND phone = ?', [billId, phone]);
+
+    res.json({
       success: true,
       message: 'Tagihan berhasil dihapus',
-      data: deletedBill
+      data: deletedBill,
     });
   } catch (error) {
     console.error('Delete bill error:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
-      message: 'Gagal menghapus tagihan' 
+      message: 'Gagal menghapus tagihan',
     });
   }
 });
@@ -806,36 +815,30 @@ app.delete('/api/bills/:id', authenticateToken, async (req, res) => {
 app.get('/api/transactions', authenticateToken, async (req, res) => {
   try {
     const phone = req.user.phone;
-    
+
     // Get income from income table
-    const [income] = await pool.query(
-      'SELECT amount, sender_phone, type, date FROM income WHERE phone = ?',
-      [phone]
-    );
-    
+    const [income] = await pool.query('SELECT amount, sender_phone, type, date FROM income WHERE phone = ?', [phone]);
+
     // Get expenses from expense table
-    const [expense] = await pool.query(
-      'SELECT amount, receiver_phone, type, date, message FROM expense WHERE phone = ?',
-      [phone]
-    );
-    
+    const [expense] = await pool.query('SELECT amount, receiver_phone, type, date, message FROM expense WHERE phone = ?', [phone]);
+
     // Format the income data to match the expected format
-    const formattedIncome = income.map(item => ({
+    const formattedIncome = income.map((item) => ({
       amount: parseFloat(item.amount),
       sender_phone: item.sender_phone.toString(),
       type: item.type,
-      date: formatDate(item.date)
+      date: formatDate(item.date),
     }));
-    
+
     // Format the expense data to match the expected format
-    const formattedExpense = expense.map(item => ({
+    const formattedExpense = expense.map((item) => ({
       amount: parseFloat(item.amount),
       receiver_phone: item.receiver_phone.toString(),
       type: item.type,
       date: formatDate(item.date),
-      message: item.message
+      message: item.message,
     }));
-    
+
     res.json({ income: formattedIncome, expense: formattedExpense });
   } catch (error) {
     console.error('Get transactions error:', error);
@@ -847,7 +850,7 @@ app.get('/api/transactions', authenticateToken, async (req, res) => {
 app.get('/api/income-record', authenticateToken, async (req, res) => {
   try {
     const phone = req.user.phone;
-    
+
     // Get income records for the user
     const [incomeRecords] = await pool.query(
       `SELECT 
@@ -864,28 +867,28 @@ app.get('/api/income-record', authenticateToken, async (req, res) => {
       ORDER BY i.date DESC`,
       [phone]
     );
-    
+
     // Format the response data
-    const formattedRecords = incomeRecords.map(record => ({
+    const formattedRecords = incomeRecords.map((record) => ({
       id: record.id,
-      amount: record.amount ? parseInt(record.amount).toString() : "0",
-      sender_phone: record.sender_phone ? record.sender_phone.toString() : "",
-      sender_name: record.sender_name || "Unknown",
-      type: record.type || "normal",
+      amount: record.amount ? parseInt(record.amount).toString() : '0',
+      sender_phone: record.sender_phone ? record.sender_phone.toString() : '',
+      sender_name: record.sender_name || 'Unknown',
+      type: record.type || 'normal',
       date: record.date || new Date().toISOString().split('T')[0],
-      message: record.message || ""
+      message: record.message || '',
     }));
-    
+
     res.json({
       success: true,
       message: 'Data pemasukan berhasil diambil',
-      records: formattedRecords
+      records: formattedRecords,
     });
   } catch (error) {
     console.error('Get income records error:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
-      message: 'Gagal mengambil data pemasukan' 
+      message: 'Gagal mengambil data pemasukan',
     });
   }
 });
@@ -894,36 +897,27 @@ app.get('/api/income-record', authenticateToken, async (req, res) => {
 app.get('/api/income-record-summary', authenticateToken, async (req, res) => {
   try {
     const phone = req.user.phone;
-    
+
     // Get total income
-    const [totalResult] = await pool.query(
-      'SELECT SUM(amount) as total_income FROM income WHERE phone = ?',
-      [phone]
-    );
-    
+    const [totalResult] = await pool.query('SELECT SUM(amount) as total_income FROM income WHERE phone = ?', [phone]);
+
     // Get income by type
-    const [incomeByType] = await pool.query(
-      'SELECT type, SUM(amount) as total FROM income WHERE phone = ? GROUP BY type',
-      [phone]
-    );
-    
+    const [incomeByType] = await pool.query('SELECT type, SUM(amount) as total FROM income WHERE phone = ? GROUP BY type', [phone]);
+
     // Get total transactions count
-    const [transactionCount] = await pool.query(
-      'SELECT COUNT(*) as total_transactions FROM income WHERE phone = ?',
-      [phone]
-    );
-    
+    const [transactionCount] = await pool.query('SELECT COUNT(*) as total_transactions FROM income WHERE phone = ?', [phone]);
+
     // Format the response
     const totalIncome = totalResult[0].total_income || 0;
-    
+
     // Initialize with default values
     let normalIncome = 0;
     let giftIncome = 0;
     let topupIncome = 0;
-    
+
     // Map the income by type
-    incomeByType.forEach(item => {
-      switch(item.type) {
+    incomeByType.forEach((item) => {
+      switch (item.type) {
         case 'normal':
           normalIncome = parseFloat(item.total);
           break;
@@ -935,7 +929,7 @@ app.get('/api/income-record-summary', authenticateToken, async (req, res) => {
           break;
       }
     });
-    
+
     res.json({
       success: true,
       data: {
@@ -943,14 +937,14 @@ app.get('/api/income-record-summary', authenticateToken, async (req, res) => {
         normal_income: normalIncome.toString(),
         gift_income: giftIncome.toString(),
         topup_income: topupIncome.toString(),
-        total_transactions: transactionCount[0].total_transactions
-      }
+        total_transactions: transactionCount[0].total_transactions,
+      },
     });
   } catch (error) {
     console.error('Get income record summary error:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
-      message: 'Gagal mengambil data ringkasan pendapatan' 
+      message: 'Gagal mengambil data ringkasan pendapatan',
     });
   }
 });
@@ -959,9 +953,10 @@ app.get('/api/income-record-summary', authenticateToken, async (req, res) => {
 app.get('/api/expense-record', authenticateToken, async (req, res) => {
   try {
     const phone = req.user.phone;
-    
+
     // Join expense table with users table to get receiver names
-    const [expenseRecords] = await pool.query(`
+    const [expenseRecords] = await pool.query(
+      `
       SELECT 
         e.amount, 
         e.receiver_phone, 
@@ -973,10 +968,13 @@ app.get('/api/expense-record', authenticateToken, async (req, res) => {
       LEFT JOIN users u ON e.receiver_phone = u.phone
       WHERE e.phone = ?
       ORDER BY e.date DESC
-    `, [phone]);
-    
+    `,
+      [phone]
+    );
+
     // Get summary statistics
-    const [summaryResults] = await pool.query(`
+    const [summaryResults] = await pool.query(
+      `
       SELECT 
         SUM(amount) as total_expense,
         COUNT(*) as total_transactions,
@@ -986,28 +984,30 @@ app.get('/api/expense-record', authenticateToken, async (req, res) => {
         COUNT(CASE WHEN type = 'gift' THEN 1 END) as count_gift
       FROM expense
       WHERE phone = ?
-    `, [phone]);
-    
+    `,
+      [phone]
+    );
+
     const summary = {
-      total_expense: summaryResults[0].total_expense ? parseInt(summaryResults[0].total_expense).toString() : "0",
+      total_expense: summaryResults[0].total_expense ? parseInt(summaryResults[0].total_expense).toString() : '0',
       total_transactions: summaryResults[0].total_transactions,
-      total_normal: summaryResults[0].total_normal ? parseInt(summaryResults[0].total_normal).toString() : "0",
-      total_gift: summaryResults[0].total_gift ? parseInt(summaryResults[0].total_gift).toString() : "0",
+      total_normal: summaryResults[0].total_normal ? parseInt(summaryResults[0].total_normal).toString() : '0',
+      total_gift: summaryResults[0].total_gift ? parseInt(summaryResults[0].total_gift).toString() : '0',
       count_normal: summaryResults[0].count_normal || 0,
-      count_gift: summaryResults[0].count_gift || 0
+      count_gift: summaryResults[0].count_gift || 0,
     };
-    
+
     // Format the response data
-    const formattedRecords = expenseRecords.map(record => ({
+    const formattedRecords = expenseRecords.map((record) => ({
       amount: record.amount.toString(),
       receiver: record.receiver || 'Unknown', // Handle case where receiver might not be in users table
       type: record.type,
-      message: record.message || ""
+      message: record.message || '',
     }));
-    
+
     res.json({
       summary: summary,
-      records: formattedRecords
+      records: formattedRecords,
     });
   } catch (error) {
     console.error('Get expense records error:', error);
@@ -1019,32 +1019,29 @@ app.get('/api/expense-record', authenticateToken, async (req, res) => {
 app.get('/api/search-user/:phone', authenticateToken, async (req, res) => {
   try {
     const searchPhone = req.params.phone;
-    
+
     // Search for the exact phone number
-    const [users] = await pool.query(
-      'SELECT phone, name FROM users WHERE phone = ?',
-      [searchPhone]
-    );
-    
+    const [users] = await pool.query('SELECT phone, name FROM users WHERE phone = ?', [searchPhone]);
+
     if (users.length === 0) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
-        message: 'User tidak ditemukan'
+        message: 'User tidak ditemukan',
       });
     }
-    
+
     res.json({
       success: true,
       data: {
         phone: users[0].phone.toString(),
-        name: users[0].name
-      }
+        name: users[0].name,
+      },
     });
   } catch (error) {
     console.error('Search user error:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
-      message: 'Gagal mencari user' 
+      message: 'Gagal mencari user',
     });
   }
 });
@@ -1053,12 +1050,12 @@ app.get('/api/search-user/:phone', authenticateToken, async (req, res) => {
 app.get('/api/test-headers', (req, res) => {
   console.log('Received headers:', req.headers);
   console.log('Received cookies:', req.cookies);
-  res.json({ 
+  res.json({
     message: 'Headers and cookies received',
     headers: req.headers,
     cookies: req.cookies,
     authHeader: req.headers['authorization'],
-    tokenCookie: req.cookies.token
+    tokenCookie: req.cookies.token,
   });
 });
 
@@ -1066,10 +1063,11 @@ app.get('/api/test-headers', (req, res) => {
 app.get('/api/upcoming-bills', authenticateToken, async (req, res) => {
   try {
     const phone = req.user.phone;
-    
+
     // Get upcoming bills
     // Convert string dates to proper date objects for comparison
-    const [billsRecords] = await pool.query(`
+    const [billsRecords] = await pool.query(
+      `
       SELECT 
         id,
         name as nameBills,
@@ -1079,16 +1077,18 @@ app.get('/api/upcoming-bills', authenticateToken, async (req, res) => {
       FROM bill
       WHERE phone = ?
       ORDER BY STR_TO_DATE(dueDate, '%Y-%m-%d') ASC
-    `, [phone]);
-    
+    `,
+      [phone]
+    );
+
     // Format the response data
-    const formattedBills = billsRecords.map(bill => ({
+    const formattedBills = billsRecords.map((bill) => ({
       nameBills: bill.nameBills,
       amount: bill.amount.toString(),
       dueDate: bill.dueDate,
-      category: bill.category
+      category: bill.category,
     }));
-    
+
     res.json(formattedBills);
   } catch (error) {
     console.error('Get upcoming bills error:', error);
@@ -1108,102 +1108,81 @@ app.post('/api/transfer', authenticateToken, async (req, res) => {
   try {
     const senderPhone = req.user.phone;
     const { receiverPhone, amount, message, type = 'normal' } = req.body;
-    
+
     // Validate required fields
     if (!receiverPhone || !amount) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         success: false,
-        message: 'Nomor penerima dan jumlah transfer harus diisi'
+        message: 'Nomor penerima dan jumlah transfer harus diisi',
       });
     }
-    
+
     // Validate amount is a positive number
     const transferAmount = parseInt(amount);
     if (isNaN(transferAmount) || transferAmount <= 0) {
       return res.status(400).json({
         success: false,
-        message: 'Jumlah transfer harus berupa angka positif'
+        message: 'Jumlah transfer harus berupa angka positif',
       });
     }
-    
+
     // Check if sender exists and has sufficient balance
-    const [senders] = await pool.query(
-      'SELECT * FROM users WHERE phone = ?',
-      [senderPhone]
-    );
-    
+    const [senders] = await pool.query('SELECT * FROM users WHERE phone = ?', [senderPhone]);
+
     if (senders.length === 0) {
       return res.status(404).json({
         success: false,
-        message: 'Pengguna pengirim tidak ditemukan'
+        message: 'Pengguna pengirim tidak ditemukan',
       });
     }
-    
+
     const sender = senders[0];
     const senderBalance = parseInt(sender.balance);
-    
+
     if (senderBalance < transferAmount) {
       return res.status(400).json({
         success: false,
-        message: 'Saldo tidak mencukupi untuk melakukan transfer'
+        message: 'Saldo tidak mencukupi untuk melakukan transfer',
       });
     }
-    
+
     // Check if receiver exists
-    const [receivers] = await pool.query(
-      'SELECT * FROM users WHERE phone = ?',
-      [receiverPhone]
-    );
-    
+    const [receivers] = await pool.query('SELECT * FROM users WHERE phone = ?', [receiverPhone]);
+
     if (receivers.length === 0) {
       return res.status(404).json({
         success: false,
-        message: 'Pengguna penerima tidak ditemukan'
+        message: 'Pengguna penerima tidak ditemukan',
       });
     }
-    
+
     const receiver = receivers[0];
     const receiverBalance = parseInt(receiver.balance);
-    
+
     // Begin transaction
     const connection = await pool.getConnection();
     await connection.beginTransaction();
-    
+
     try {
       // Update sender's balance
-      await connection.query(
-        'UPDATE users SET balance = ? WHERE phone = ?',
-        [senderBalance - transferAmount, senderPhone]
-      );
-      
+      await connection.query('UPDATE users SET balance = ? WHERE phone = ?', [senderBalance - transferAmount, senderPhone]);
+
       // Update receiver's balance
-      await connection.query(
-        'UPDATE users SET balance = ? WHERE phone = ?',
-        [receiverBalance + transferAmount, receiverPhone]
-      );
-      
+      await connection.query('UPDATE users SET balance = ? WHERE phone = ?', [receiverBalance + transferAmount, receiverPhone]);
+
       // Create expense record for sender
       const currentDate = new Date().toISOString().split('T')[0]; // Format: YYYY-MM-DD
-      await connection.query(
-        'INSERT INTO expense (amount, phone, receiver_phone, type, date, message) VALUES (?, ?, ?, ?, ?, ?)',
-        [transferAmount, senderPhone, receiverPhone, type, currentDate, message]
-      );
-      
+      await connection.query('INSERT INTO expense (amount, phone, receiver_phone, type, date, message) VALUES (?, ?, ?, ?, ?, ?)', [transferAmount, senderPhone, receiverPhone, type, currentDate, message]);
+
       // Create income record for receiver
-      await connection.query(
-        'INSERT INTO income (amount, phone, sender_phone, type, date, message) VALUES (?, ?, ?, ?, ?, ?)',
-        [transferAmount, receiverPhone, senderPhone, type, currentDate, message]
-      );
-      
+      await connection.query('INSERT INTO income (amount, phone, sender_phone, type, date, message) VALUES (?, ?, ?, ?, ?, ?)', [transferAmount, receiverPhone, senderPhone, type, currentDate, message]);
+
       // Commit transaction
       await connection.commit();
-      
+
       // Get updated sender balance
-      const [updatedSender] = await pool.query(
-        'SELECT balance FROM users WHERE phone = ?',
-        [senderPhone]
-      );
-      
+      const [updatedSender] = await pool.query('SELECT balance FROM users WHERE phone = ?', [senderPhone]);
+
       res.json({
         success: true,
         message: 'Transfer berhasil',
@@ -1213,8 +1192,8 @@ app.post('/api/transfer', authenticateToken, async (req, res) => {
           receiverName: receiver.name,
           date: currentDate,
           remainingBalance: updatedSender[0].balance.toString(),
-          type: type
-        }
+          type: type,
+        },
       });
     } catch (error) {
       // Rollback in case of error
@@ -1225,9 +1204,9 @@ app.post('/api/transfer', authenticateToken, async (req, res) => {
     }
   } catch (error) {
     console.error('Transfer error:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
-      message: 'Gagal melakukan transfer' 
+      message: 'Gagal melakukan transfer',
     });
   }
 });
@@ -1237,70 +1216,61 @@ app.post('/api/topup', authenticateToken, async (req, res) => {
   try {
     const phone = req.user.phone;
     const { amount } = req.body;
-    
+
     // Validate required fields
     if (!amount) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         success: false,
-        message: 'Jumlah topup harus diisi'
+        message: 'Jumlah topup harus diisi',
       });
     }
-    
+
     // Validate amount is a positive number
     const topupAmount = parseInt(amount);
     if (isNaN(topupAmount) || topupAmount <= 0) {
       return res.status(400).json({
         success: false,
-        message: 'Jumlah topup harus berupa angka positif'
+        message: 'Jumlah topup harus berupa angka positif',
       });
     }
-    
+
     // Check if user exists
-    const [users] = await pool.query(
-      'SELECT * FROM users WHERE phone = ?',
-      [phone]
-    );
-    
+    const [users] = await pool.query('SELECT * FROM users WHERE phone = ?', [phone]);
+
     if (users.length === 0) {
       return res.status(404).json({
         success: false,
-        message: 'Pengguna tidak ditemukan'
+        message: 'Pengguna tidak ditemukan',
       });
     }
-    
+
     const user = users[0];
     const currentBalance = parseInt(user.balance);
     const newBalance = currentBalance + topupAmount;
-    
+
     // Begin transaction
     const connection = await pool.getConnection();
     await connection.beginTransaction();
-    
+
     try {
       // Update user's balance
-      await connection.query(
-        'UPDATE users SET balance = ? WHERE phone = ?',
-        [newBalance, phone]
-      );
-      
+      await connection.query('UPDATE users SET balance = ? WHERE phone = ?', [newBalance, phone]);
+
       // Create income record for topup
       const currentDate = new Date().toISOString().split('T')[0]; // Format: YYYY-MM-DD
-      await connection.query(
-        'INSERT INTO income (amount, phone, sender_phone, type, date, message) VALUES (?, ?, ?, ?, ?, ?)',
-        [topupAmount, phone, phone, 'topup', currentDate, 'Top up saldo']
-      );
-      
+      await connection.query('INSERT INTO income (amount, phone, sender_phone, type, date, message) VALUES (?, ?, ?, ?, ?, ?)', [topupAmount, phone, phone, 'topup', currentDate, 'Top up saldo']);
+
       // Commit transaction
       await connection.commit();
-      
+
       res.json({
         success: true,
         message: 'Top up berhasil',
         data: {
           topupAmount: topupAmount.toString(),
           newBalance: newBalance.toString(),
-          date: currentDate
-        }
+          date: currentDate,
+        },
       });
     } catch (error) {
       // Rollback in case of error
@@ -1311,9 +1281,9 @@ app.post('/api/topup', authenticateToken, async (req, res) => {
     }
   } catch (error) {
     console.error('Topup error:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
-      message: 'Gagal melakukan top up' 
+      message: 'Gagal melakukan top up',
     });
   }
 });
@@ -1322,9 +1292,10 @@ app.post('/api/topup', authenticateToken, async (req, res) => {
 app.get('/api/recent-transactions', authenticateToken, async (req, res) => {
   try {
     const phone = req.user.phone;
-    
+
     // Get recent income transactions with sender names
-    const [incomeRecords] = await pool.query(`
+    const [incomeRecords] = await pool.query(
+      `
       SELECT 
         i.id,
         i.amount, 
@@ -1339,10 +1310,13 @@ app.get('/api/recent-transactions', authenticateToken, async (req, res) => {
       WHERE i.phone = ?
       ORDER BY i.date DESC, i.id DESC
       LIMIT 5
-    `, [phone]);
-    
+    `,
+      [phone]
+    );
+
     // Get recent expense transactions with receiver names
-    const [expenseRecords] = await pool.query(`
+    const [expenseRecords] = await pool.query(
+      `
       SELECT 
         e.id,
         e.amount, 
@@ -1357,31 +1331,33 @@ app.get('/api/recent-transactions', authenticateToken, async (req, res) => {
       WHERE e.phone = ?
       ORDER BY e.date DESC, e.id DESC
       LIMIT 5
-    `, [phone]);
-    
+    `,
+      [phone]
+    );
+
     // Combine and format the response data
-    const formattedIncome = incomeRecords.map(record => ({
+    const formattedIncome = incomeRecords.map((record) => ({
       id: record.id,
       amount: record.amount.toString(),
       otherParty: record.sender_name || 'Unknown',
       otherPartyPhone: record.sender_phone.toString(),
       type: record.type,
       date: formatDate(record.date),
-      message: record.message || "",
-      transactionType: record.transaction_type
+      message: record.message || '',
+      transactionType: record.transaction_type,
     }));
-    
-    const formattedExpense = expenseRecords.map(record => ({
+
+    const formattedExpense = expenseRecords.map((record) => ({
       id: record.id,
       amount: record.amount.toString(),
       otherParty: record.receiver_name || 'Unknown',
       otherPartyPhone: record.receiver_phone.toString(),
       type: record.type,
       date: formatDate(record.date),
-      message: record.message || "",
-      transactionType: record.transaction_type
+      message: record.message || '',
+      transactionType: record.transaction_type,
     }));
-    
+
     // Combine both types, sort by date (most recent first), and limit to 5
     const allTransactions = [...formattedIncome, ...formattedExpense]
       .sort((a, b) => {
@@ -1391,25 +1367,27 @@ app.get('/api/recent-transactions', authenticateToken, async (req, res) => {
         return dateCompare !== 0 ? dateCompare : b.id - a.id;
       })
       .slice(0, 5);
-    
+
     res.json({
       success: true,
-      data: allTransactions
+      data: allTransactions,
     });
   } catch (error) {
     console.error('Recent transactions error:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
-      message: 'Gagal mengambil data transaksi terbaru' 
+      message: 'Gagal mengambil data transaksi terbaru',
     });
   }
 });
 
 // Initialize database and start server
-initializeDb().then(() => {
-  app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
+initializeDb()
+  .then(() => {
+    app.listen(PORT, () => {
+      console.log(`Server running on port ${PORT}`);
+    });
+  })
+  .catch((err) => {
+    console.error('Failed to initialize server:', err);
   });
-}).catch(err => {
-  console.error('Failed to initialize server:', err);
-});

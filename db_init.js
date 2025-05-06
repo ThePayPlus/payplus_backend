@@ -8,7 +8,7 @@ const dbConfig = {
   host: process.env.DB_HOST || 'localhost',
   user: process.env.DB_USER || 'root',
   password: process.env.DB_PASSWORD || '',
-  database: process.env.DB_NAME || 'payplus'
+  database: process.env.DB_NAME || 'payplus',
 };
 
 async function initializeDb() {
@@ -18,18 +18,18 @@ async function initializeDb() {
     connection = await mysql.createConnection({
       host: dbConfig.host,
       user: dbConfig.user,
-      password: dbConfig.password
+      password: dbConfig.password,
     });
-    
+
     // Create database if it doesn't exist
     await connection.query(`CREATE DATABASE IF NOT EXISTS ${dbConfig.database}`);
     await connection.query(`USE ${dbConfig.database}`);
-    
+
     console.log(`Database '${dbConfig.database}' created or already exists`);
-    
+
     // Create tables using the provided SQL schema
     await createTables(connection);
-    
+
     console.log('Database initialization completed successfully');
   } catch (error) {
     console.error('Database initialization error:', error);
@@ -114,6 +114,24 @@ async function createTables(connection) {
       )
     `);
 
+    // Friends table
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS friends (
+        id int(11) NOT NULL AUTO_INCREMENT,
+        user_phone bigint(50) NOT NULL,
+        friend_phone bigint(50) NOT NULL,
+        status enum('pending','accepted','rejected') NOT NULL DEFAULT 'pending',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        UNIQUE KEY unique_friendship (user_phone, friend_phone),
+        KEY fk_user_friends (user_phone),
+        KEY fk_friend_user (friend_phone),
+        CONSTRAINT fk_user_friends FOREIGN KEY (user_phone) REFERENCES users (phone) ON DELETE CASCADE ON UPDATE CASCADE,
+        CONSTRAINT fk_friend_user FOREIGN KEY (friend_phone) REFERENCES users (phone) ON DELETE CASCADE ON UPDATE CASCADE
+      )
+    `);
+
     // Insert sample data
     await insertSampleData(connection);
 
@@ -128,12 +146,12 @@ async function insertSampleData(connection) {
   try {
     // Check if sample user already exists
     const [existingUsers] = await connection.query('SELECT * FROM users WHERE phone = ?', ['6281301220081']);
-    
+
     if (existingUsers.length > 0) {
       console.log('Sample data already exists, skipping insertion');
       return;
     }
-    
+
     // Hash passwords
     const saltRounds = 10;
     const hashedPassword1 = await bcrypt.hash('0081', saltRounds);
@@ -142,9 +160,10 @@ async function insertSampleData(connection) {
     const hashedPassword4 = await bcrypt.hash('3187', saltRounds);
     const hashedPassword5 = await bcrypt.hash('3393', saltRounds);
     const hashedPassword6 = await bcrypt.hash('0221', saltRounds); // Password baru untuk Georgio
-    
+
     // Insert sample users with hashed passwords - removed role field
-    await connection.query(`
+    await connection.query(
+      `
       INSERT INTO users (phone, name, email, password, balance) VALUES
       (6281301220081, 'Fausta Akbar', 'fausta@gmail.com', ?, 10300000),
       (6281301220310, 'Bryant Jonathan', 'bryant@gmail.com', ?, 6700000),
@@ -152,9 +171,11 @@ async function insertSampleData(connection) {
       (6281301223187, 'Zaidaan Afif', 'zaidaan@gmail.com', ?, 3000000),
       (6281301223393, 'Rafi Suwardana', 'rafisuwardana@gmail.com', ?, 8000000),
       (6281301220221, 'Georgio Armando', 'georgio@gmail.com', ?, 8888888)
-    `, [hashedPassword1, hashedPassword2, hashedPassword3, hashedPassword4, hashedPassword5, hashedPassword6]);
+    `,
+      [hashedPassword1, hashedPassword2, hashedPassword3, hashedPassword4, hashedPassword5, hashedPassword6]
+    );
     console.log('Sample users created with hashed passwords');
-    
+
     // Insert sample savings
     await connection.query(`
       INSERT INTO savings (id, phone, nama, deskripsi, target, terkumpul) VALUES
@@ -162,7 +183,7 @@ async function insertSampleData(connection) {
       (2, 6281301223393, 'Beli Mobil', 'menabung mobil pajero', 500000000, 4000000)
     `);
     console.log('Sample savings created');
-    
+
     // Insert sample bills
     await connection.query(`
       INSERT INTO bill (id, phone, name, amount, dueDate, category) VALUES
@@ -173,7 +194,7 @@ async function insertSampleData(connection) {
       (5, 6281301223393, 'Motor', 5000000, '2025-01-07', 'Vehicle')
     `);
     console.log('Sample bills created');
-    
+
     // Insert sample expense
     await connection.query(`
       INSERT INTO expense (id, amount, phone, receiver_phone, type, date, message) VALUES
@@ -185,7 +206,7 @@ async function insertSampleData(connection) {
       (6, 40000, 6281301223187, 6281301220081, 'normal', '2025-01-01', NULL)
     `);
     console.log('Sample expenses created');
-    
+
     // Insert sample income
     await connection.query(`
       INSERT INTO income (id, amount, phone, sender_phone, type, date, message) VALUES
@@ -200,7 +221,6 @@ async function insertSampleData(connection) {
       (9, 300000, 6281301220081, 6281301220310, 'gift', '2025-01-06', 'halooo')
     `);
     console.log('Sample incomes created');
-    
   } catch (error) {
     console.error('Error inserting sample data:', error);
     throw error;
@@ -208,10 +228,12 @@ async function insertSampleData(connection) {
 }
 
 // Run initialization
-initializeDb().then(() => {
-  console.log('Database initialization completed');
-  process.exit(0);
-}).catch(err => {
-  console.error('Failed to initialize database:', err);
-  process.exit(1);
-});
+initializeDb()
+  .then(() => {
+    console.log('Database initialization completed');
+    process.exit(0);
+  })
+  .catch((err) => {
+    console.error('Failed to initialize database:', err);
+    process.exit(1);
+  });
