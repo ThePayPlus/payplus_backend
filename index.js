@@ -856,10 +856,10 @@ app.get('/api/income-record', authenticateToken, async (req, res) => {
       `SELECT 
         i.id, 
         i.amount, 
+        i.date, 
+        i.type, 
         i.sender_phone, 
         u.name as sender_name,
-        i.type, 
-        i.date, 
         i.message
       FROM income i
       LEFT JOIN users u ON i.sender_phone = u.phone
@@ -872,10 +872,10 @@ app.get('/api/income-record', authenticateToken, async (req, res) => {
     const formattedRecords = incomeRecords.map((record) => ({
       id: record.id,
       amount: record.amount ? parseInt(record.amount).toString() : '0',
+      date: record.date.toLocaleDateString('en-CA'),
+      type: record.type || 'normal',
       sender_phone: record.sender_phone ? record.sender_phone.toString() : '',
       sender_name: record.sender_name || 'Unknown',
-      type: record.type || 'normal',
-      date: record.date || new Date().toISOString().split('T')[0],
       message: record.message || '',
     }));
 
@@ -956,26 +956,24 @@ app.get('/api/expense-record', authenticateToken, async (req, res) => {
 
     // Join expense table with users table to get receiver names
     const [expenseRecords] = await pool.query(
-      `
-      SELECT 
+      `SELECT 
+        e.id,
         e.amount, 
         e.receiver_phone, 
-        u.name AS receiver, 
+        u.name AS receiver_name, 
         e.type, 
         e.date, 
         e.message
       FROM expense e
       LEFT JOIN users u ON e.receiver_phone = u.phone
       WHERE e.phone = ?
-      ORDER BY e.date DESC
-    `,
+      ORDER BY e.date DESC`,
       [phone]
     );
 
     // Get summary statistics
     const [summaryResults] = await pool.query(
-      `
-      SELECT 
+      `SELECT 
         SUM(amount) as total_expense,
         COUNT(*) as total_transactions,
         SUM(CASE WHEN type = 'normal' THEN amount ELSE 0 END) as total_normal,
@@ -988,25 +986,20 @@ app.get('/api/expense-record', authenticateToken, async (req, res) => {
       [phone]
     );
 
-    const summary = {
-      total_expense: summaryResults[0].total_expense ? parseInt(summaryResults[0].total_expense).toString() : '0',
-      total_transactions: summaryResults[0].total_transactions,
-      total_normal: summaryResults[0].total_normal ? parseInt(summaryResults[0].total_normal).toString() : '0',
-      total_gift: summaryResults[0].total_gift ? parseInt(summaryResults[0].total_gift).toString() : '0',
-      count_normal: summaryResults[0].count_normal || 0,
-      count_gift: summaryResults[0].count_gift || 0,
-    };
-
     // Format the response data
     const formattedRecords = expenseRecords.map((record) => ({
-      amount: record.amount.toString(),
-      receiver: record.receiver || 'Unknown', // Handle case where receiver might not be in users table
-      type: record.type,
+      id: record.id,
+      amount: record.amount ? parseInt(record.amount).toString() : '0',
+      receiver_phone: record.receiver_phone ? record.receiver_phone.toString() : '',
+      receiver_name: record.receiver_name || 'Unknown',
+      type: record.type || 'normal',
+      date: record.date.toLocaleDateString('en-CA'),
       message: record.message || '',
     }));
 
     res.json({
-      summary: summary,
+      success: true,
+      message: 'Data pengeluaran berhasil diambil',
       records: formattedRecords,
     });
   } catch (error) {
