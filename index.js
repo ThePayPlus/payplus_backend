@@ -202,8 +202,6 @@ app.post('/api/auth/register', async (req, res) => {
   }
 });
 
-// ... existing code ...
-
 // Friends endpoints
 // Add friend
 app.post('/api/friends', authenticateToken, async (req, res) => {
@@ -288,6 +286,134 @@ app.get('/api/friends', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Get friends error:', error);
     res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Endpoint untuk mendapatkan permintaan pertemanan yang pending
+app.get('/api/friends/requests', authenticateToken, async (req, res) => {
+  try {
+    const userPhone = req.user.phone;
+
+    // Ambil daftar permintaan pertemanan yang pending
+    const [pendingRequests] = await pool.query(
+      `
+      SELECT f.id, f.user_phone, u.name as requester_name, f.created_at
+      FROM friends f
+      JOIN users u ON f.user_phone = u.phone
+      WHERE f.friend_phone = ? AND f.status = 'pending'
+      ORDER BY f.created_at DESC
+    `,
+      [userPhone]
+    );
+
+    res.status(200).json({
+      success: true,
+      message: 'Daftar permintaan pertemanan berhasil diambil',
+      data: pendingRequests,
+    });
+  } catch (error) {
+    console.error('Get friend requests error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+    });
+  }
+});
+
+// Endpoint untuk menerima atau menolak permintaan pertemanan
+app.put('/api/friends/:id', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body; // 'accepted' atau 'rejected'
+    const userPhone = req.user.phone;
+
+    if (!['accepted', 'rejected'].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Status tidak valid. Gunakan "accepted" atau "rejected"',
+      });
+    }
+
+    // Verifikasi bahwa permintaan pertemanan ini ditujukan untuk pengguna yang sedang login
+    const [friendRequest] = await pool.query('SELECT * FROM friends WHERE id = ? AND friend_phone = ?', [id, userPhone]);
+
+    if (friendRequest.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Permintaan pertemanan tidak ditemukan',
+      });
+    }
+
+    // Update status permintaan pertemanan
+    await pool.query('UPDATE friends SET status = ?, updated_at = NOW() WHERE id = ?', [status, id]);
+
+    res.status(200).json({
+      success: true,
+      message: status === 'accepted' ? 'Permintaan pertemanan diterima' : 'Permintaan pertemanan ditolak',
+    });
+  } catch (error) {
+    console.error('Update friend request error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+    });
+  }
+});
+
+// Endpoint untuk menerima atau menolak permintaan pertemanan
+app.patch('/api/friends/respond/:requestId', authenticateToken, async (req, res) => {
+  try {
+    const userPhone = req.user.phone;
+    const { requestId } = req.params;
+    const { action } = req.body;
+
+    if (!requestId || !action) {
+      return res.status(400).json({
+        success: false,
+        message: 'ID permintaan dan aksi (accept/reject) diperlukan',
+      });
+    }
+
+    if (action !== 'accept' && action !== 'reject') {
+      return res.status(400).json({
+        success: false,
+        message: 'Aksi harus berupa "accept" atau "reject"',
+      });
+    }
+
+    // Cek apakah permintaan pertemanan ada dan ditujukan untuk pengguna ini
+    const [friendRequest] = await pool.query('SELECT * FROM friends WHERE id = ? AND friend_phone = ?', [requestId, userPhone]);
+
+    if (friendRequest.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Permintaan pertemanan tidak ditemukan',
+      });
+    }
+
+    const request = friendRequest[0];
+
+    if (request.status !== 'pending') {
+      return res.status(400).json({
+        success: false,
+        message: 'Permintaan pertemanan ini sudah diproses sebelumnya',
+      });
+    }
+
+    // Update status permintaan pertemanan
+    const newStatus = action === 'accept' ? 'accepted' : 'rejected';
+    await pool.query('UPDATE friends SET status = ?, updated_at = NOW() WHERE id = ?', [newStatus, requestId]);
+
+    res.status(200).json({
+      success: true,
+      message: action === 'accept' ? 'Permintaan pertemanan diterima' : 'Permintaan pertemanan ditolak',
+    });
+  } catch (error) {
+    console.error('Respond to friend request error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+    });
   }
 });
 
