@@ -17,7 +17,7 @@ app.use(cookieParser());
 app.use(
   cors({
     origin: '*', // Ubah ke URL frontend Anda
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true, // Enable credentials (cookies, authorization headers, etc.)
   })
@@ -569,53 +569,84 @@ app.patch('/api/savings/:id', authenticateToken, async (req, res) => {
   try {
     const phone = req.user.phone;
     const savingsId = req.params.id;
-    const { terkumpul } = req.body;
+    const { nama, deskripsi, target, terkumpul } = req.body;
 
-    // Validate input
-    if (terkumpul === undefined) {
-      return res.status(400).json({
-        success: false,
-        message: 'Nilai terkumpul harus diisi',
-      });
+    // Check if savings exists and belongs to the user
+    const [savingsCheck] = await pool.query('SELECT * FROM savings WHERE id = ? AND phone = ?', [savingsId, phone]);
+
+    if (savingsCheck.length === 0) {
+      return res.status(404).json({ message: 'Tabungan tidak ditemukan atau bukan milik Anda' });
     }
 
-    // Check if the savings record exists and belongs to the user
-    const [savings] = await pool.query('SELECT * FROM savings WHERE id = ? AND phone = ?', [savingsId, phone]);
+    // Update savings
+    await pool.query(
+      'UPDATE savings SET nama = ?, deskripsi = ?, target = ?, terkumpul = ? WHERE id = ?',
+      [nama, deskripsi, target, terkumpul, savingsId]
+    );
 
-    if (savings.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Data tabungan tidak ditemukan atau bukan milik Anda',
-      });
-    }
-
-    // Add the new amount to the existing terkumpul value
-    const currentAmount = parseInt(savings[0].terkumpul);
-    const additionalAmount = parseInt(terkumpul);
-    const newTotalAmount = currentAmount + additionalAmount;
-
-    // Update with the new total
-    await pool.query('UPDATE savings SET terkumpul = ? WHERE id = ? AND phone = ?', [newTotalAmount, savingsId, phone]);
-
-    // Get the updated savings record
-    const [updatedSavings] = await pool.query('SELECT id, nama, deskripsi, target, terkumpul FROM savings WHERE id = ?', [savingsId]);
+    // Get updated savings
+    const [updatedSavings] = await pool.query('SELECT * FROM savings WHERE id = ?', [savingsId]);
 
     res.json({
       success: true,
       message: 'Tabungan berhasil diperbarui',
-      data: {
-        id: updatedSavings[0].id,
-        nama: updatedSavings[0].nama,
-        deskripsi: updatedSavings[0].deskripsi || '',
-        target: updatedSavings[0].target.toString(),
-        terkumpul: updatedSavings[0].terkumpul.toString(),
-      },
+      data: updatedSavings[0],
     });
   } catch (error) {
     console.error('Update savings error:', error);
+    res.status(500).json({ message: 'Gagal memperbarui tabungan' });
+  }
+});
+
+// Add amount to savings
+app.patch('/api/savings/:id/add', authenticateToken, async (req, res) => {
+  try {
+    const phone = req.user.phone;
+    const savingId = req.params.id;
+    const { amount } = req.body;
+
+    if (!amount || isNaN(amount) || amount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Jumlah yang ditambahkan harus berupa angka positif'
+      });
+    }
+
+    // Verifikasi bahwa tabungan milik pengguna yang terautentikasi
+    const [savingCheck] = await pool.query('SELECT * FROM savings WHERE id = ? AND phone = ?', [savingId, phone]);
+
+    if (savingCheck.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Tabungan tidak ditemukan atau bukan milik Anda'
+      });
+    }
+
+    const saving = savingCheck[0];
+    const newAmount = parseInt(saving.terkumpul) + parseInt(amount);
+
+    // Update jumlah terkumpul
+    await pool.query('UPDATE savings SET terkumpul = ? WHERE id = ?', [newAmount, savingId]);
+
+    // Ambil data tabungan yang sudah diupdate
+    const [updatedSaving] = await pool.query('SELECT id, nama, deskripsi, target, terkumpul FROM savings WHERE id = ?', [savingId]);
+
+    res.json({
+      success: true,
+      message: 'Dana berhasil ditambahkan ke tabungan',
+      data: {
+        id: updatedSaving[0].id,
+        nama: updatedSaving[0].nama,
+        deskripsi: updatedSaving[0].deskripsi || '',
+        target: updatedSaving[0].target.toString(),
+        terkumpul: updatedSaving[0].terkumpul.toString()
+      }
+    });
+  } catch (error) {
+    console.error('Add to savings error:', error);
     res.status(500).json({
       success: false,
-      message: 'Gagal memperbarui tabungan',
+      message: 'Gagal menambahkan dana ke tabungan'
     });
   }
 });
