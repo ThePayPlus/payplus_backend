@@ -852,6 +852,46 @@ app.delete('/api/savings/:id', authenticateToken, async (req, res) => {
   }
 });
 
+// Endpoint untuk mengupdate target tabungan
+app.patch('/api/savings/:id/update-target', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { target } = req.body;
+    const phone = req.user.phone;
+
+    if (!id || !target) {
+      return res.status(400).json({
+        success: false,
+        message: 'ID tabungan dan target baru diperlukan',
+      });
+    }
+
+    // Verifikasi bahwa tabungan ini milik pengguna yang sedang login
+    const [savingExists] = await pool.query('SELECT * FROM savings WHERE id = ? AND phone = ?', [id, phone]);
+
+    if (savingExists.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Tabungan tidak ditemukan atau bukan milik Anda',
+      });
+    }
+
+    // Update target tabungan
+    await pool.query('UPDATE savings SET target = ? WHERE id = ?', [target, id]);
+
+    res.status(200).json({
+      success: true,
+      message: 'Target tabungan berhasil diperbarui',
+    });
+  } catch (error) {
+    console.error('Update savings target error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+    });
+  }
+});
+
 // Bills endpoints
 // Create new bill
 app.post('/api/bills', authenticateToken, async (req, res) => {
