@@ -202,8 +202,6 @@ app.post('/api/auth/register', async (req, res) => {
   }
 });
 
-// ... existing code ...
-
 // Friends endpoints
 // Add friend
 app.post('/api/friends', authenticateToken, async (req, res) => {
@@ -291,6 +289,235 @@ app.get('/api/friends', authenticateToken, async (req, res) => {
   }
 });
 
+// Endpoint untuk mendapatkan permintaan pertemanan yang pending
+app.get('/api/friends/requests', authenticateToken, async (req, res) => {
+  try {
+    const userPhone = req.user.phone;
+
+    // Ambil daftar permintaan pertemanan yang pending
+    const [pendingRequests] = await pool.query(
+      `
+      SELECT f.id, f.user_phone, u.name as requester_name, f.created_at
+      FROM friends f
+      JOIN users u ON f.user_phone = u.phone
+      WHERE f.friend_phone = ? AND f.status = 'pending'
+      ORDER BY f.created_at DESC
+    `,
+      [userPhone]
+    );
+
+    res.status(200).json({
+      success: true,
+      message: 'Daftar permintaan pertemanan berhasil diambil',
+      data: pendingRequests,
+    });
+  } catch (error) {
+    console.error('Get friend requests error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+    });
+  }
+});
+
+// Endpoint untuk menerima atau menolak permintaan pertemanan
+app.put('/api/friends/:id', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body; // 'accepted' atau 'rejected'
+    const userPhone = req.user.phone;
+
+    if (!['accepted', 'rejected'].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Status tidak valid. Gunakan "accepted" atau "rejected"',
+      });
+    }
+
+    // Verifikasi bahwa permintaan pertemanan ini ditujukan untuk pengguna yang sedang login
+    const [friendRequest] = await pool.query('SELECT * FROM friends WHERE id = ? AND friend_phone = ?', [id, userPhone]);
+
+    if (friendRequest.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Permintaan pertemanan tidak ditemukan',
+      });
+    }
+
+    // Update status permintaan pertemanan
+    await pool.query('UPDATE friends SET status = ?, updated_at = NOW() WHERE id = ?', [status, id]);
+
+    res.status(200).json({
+      success: true,
+      message: status === 'accepted' ? 'Permintaan pertemanan diterima' : 'Permintaan pertemanan ditolak',
+    });
+  } catch (error) {
+    console.error('Update friend request error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+    });
+  }
+});
+
+// Endpoint untuk menerima atau menolak permintaan pertemanan
+app.patch('/api/friends/respond/:requestId', authenticateToken, async (req, res) => {
+  try {
+    const userPhone = req.user.phone;
+    const { requestId } = req.params;
+    const { action } = req.body;
+
+    if (!requestId || !action) {
+      return res.status(400).json({
+        success: false,
+        message: 'ID permintaan dan aksi (accept/reject) diperlukan',
+      });
+    }
+
+    if (action !== 'accept' && action !== 'reject') {
+      return res.status(400).json({
+        success: false,
+        message: 'Aksi harus berupa "accept" atau "reject"',
+      });
+    }
+
+    // Cek apakah permintaan pertemanan ada dan ditujukan untuk pengguna ini
+    const [friendRequest] = await pool.query('SELECT * FROM friends WHERE id = ? AND friend_phone = ?', [requestId, userPhone]);
+
+    if (friendRequest.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Permintaan pertemanan tidak ditemukan',
+      });
+    }
+
+    const request = friendRequest[0];
+
+    if (request.status !== 'pending') {
+      return res.status(400).json({
+        success: false,
+        message: 'Permintaan pertemanan ini sudah diproses sebelumnya',
+      });
+    }
+
+    // Update status permintaan pertemanan
+    const newStatus = action === 'accept' ? 'accepted' : 'rejected';
+    await pool.query('UPDATE friends SET status = ?, updated_at = NOW() WHERE id = ?', [newStatus, requestId]);
+
+    res.status(200).json({
+      success: true,
+      message: action === 'accept' ? 'Permintaan pertemanan diterima' : 'Permintaan pertemanan ditolak',
+    });
+  } catch (error) {
+    console.error('Respond to friend request error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+    });
+  }
+});
+
+// Endpoint untuk mengedit data teman
+app.put('/api/friends/edit/:friendPhone', authenticateToken, async (req, res) => {
+  try {
+    const userPhone = req.user.phone;
+    const { friendPhone } = req.params;
+    const { nickname } = req.body;
+
+    if (!friendPhone) {
+      return res.status(400).json({
+        success: false,
+        message: 'Nomor telepon teman diperlukan',
+      });
+    }
+
+    if (!nickname) {
+      return res.status(400).json({
+        success: false,
+        message: 'Nickname diperlukan untuk mengedit teman',
+      });
+    }
+
+    // Cek apakah pertemanan ada dan sudah diterima
+    const [existingFriendship] = await pool.query(
+      `SELECT * FROM friends 
+       WHERE ((user_phone = ? AND friend_phone = ?) OR (user_phone = ? AND friend_phone = ?))
+       AND status = 'accepted'`,
+      [userPhone, friendPhone, friendPhone, userPhone]
+    );
+
+    if (existingFriendship.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Pertemanan tidak ditemukan atau belum diterima',
+      });
+    }
+
+    // Perbarui data teman (tambahkan kolom nickname di tabel friends jika belum ada)
+    const friendship = existingFriendship[0];
+
+    if (friendship.user_phone === userPhone) {
+      await pool.query('UPDATE friends SET friend_nickname = ?, updated_at = NOW() WHERE id = ?', [nickname, friendship.id]);
+    } else {
+      await pool.query('UPDATE friends SET user_nickname = ?, updated_at = NOW() WHERE id = ?', [nickname, friendship.id]);
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Data teman berhasil diperbarui',
+    });
+  } catch (error) {
+    console.error('Edit friend error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+    });
+  }
+});
+
+// Endpoint untuk menghapus teman
+app.delete('/api/friends/:friendPhone', authenticateToken, async (req, res) => {
+  try {
+    const userPhone = req.user.phone;
+    const { friendPhone } = req.params;
+
+    if (!friendPhone) {
+      return res.status(400).json({
+        success: false,
+        message: 'Nomor telepon teman diperlukan',
+      });
+    }
+
+    // Cek apakah pertemanan ada
+    const [existingFriendship] = await pool.query(
+      `SELECT * FROM friends 
+       WHERE (user_phone = ? AND friend_phone = ?) OR (user_phone = ? AND friend_phone = ?)`,
+      [userPhone, friendPhone, friendPhone, userPhone]
+    );
+
+    if (existingFriendship.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Pertemanan tidak ditemukan',
+      });
+    }
+
+    // Hapus pertemanan
+    const friendship = existingFriendship[0];
+    await pool.query('DELETE FROM friends WHERE id = ?', [friendship.id]);
+
+    res.status(200).json({
+      success: true,
+      message: 'Teman berhasil dihapus dari daftar teman',
+    });
+  } catch (error) {
+    console.error('Delete friend error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+    });
+  }
+});
 //## API UNTUK GET PROFILE
 app.get('/api/profile', authenticateToken, async (req, res) => {
   try {
@@ -504,53 +731,81 @@ app.patch('/api/savings/:id', authenticateToken, async (req, res) => {
   try {
     const phone = req.user.phone;
     const savingsId = req.params.id;
-    const { terkumpul } = req.body;
+    const { nama, deskripsi, target, terkumpul } = req.body;
 
-    // Validate input
-    if (terkumpul === undefined) {
-      return res.status(400).json({
-        success: false,
-        message: 'Nilai terkumpul harus diisi',
-      });
+    // Check if savings exists and belongs to the user
+    const [savingsCheck] = await pool.query('SELECT * FROM savings WHERE id = ? AND phone = ?', [savingsId, phone]);
+
+    if (savingsCheck.length === 0) {
+      return res.status(404).json({ message: 'Tabungan tidak ditemukan atau bukan milik Anda' });
     }
 
-    // Check if the savings record exists and belongs to the user
-    const [savings] = await pool.query('SELECT * FROM savings WHERE id = ? AND phone = ?', [savingsId, phone]);
+    // Update savings
+    await pool.query('UPDATE savings SET nama = ?, deskripsi = ?, target = ?, terkumpul = ? WHERE id = ?', [nama, deskripsi, target, terkumpul, savingsId]);
 
-    if (savings.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Data tabungan tidak ditemukan atau bukan milik Anda',
-      });
-    }
-
-    // Add the new amount to the existing terkumpul value
-    const currentAmount = parseInt(savings[0].terkumpul);
-    const additionalAmount = parseInt(terkumpul);
-    const newTotalAmount = currentAmount + additionalAmount;
-
-    // Update with the new total
-    await pool.query('UPDATE savings SET terkumpul = ? WHERE id = ? AND phone = ?', [newTotalAmount, savingsId, phone]);
-
-    // Get the updated savings record
-    const [updatedSavings] = await pool.query('SELECT id, nama, deskripsi, target, terkumpul FROM savings WHERE id = ?', [savingsId]);
+    // Get updated savings
+    const [updatedSavings] = await pool.query('SELECT * FROM savings WHERE id = ?', [savingsId]);
 
     res.json({
       success: true,
       message: 'Tabungan berhasil diperbarui',
-      data: {
-        id: updatedSavings[0].id,
-        nama: updatedSavings[0].nama,
-        deskripsi: updatedSavings[0].deskripsi || '',
-        target: updatedSavings[0].target.toString(),
-        terkumpul: updatedSavings[0].terkumpul.toString(),
-      },
+      data: updatedSavings[0],
     });
   } catch (error) {
     console.error('Update savings error:', error);
+    res.status(500).json({ message: 'Gagal memperbarui tabungan' });
+  }
+});
+
+// Add amount to savings
+app.patch('/api/savings/:id/add', authenticateToken, async (req, res) => {
+  try {
+    const phone = req.user.phone;
+    const savingId = req.params.id;
+    const { amount } = req.body;
+
+    if (!amount || isNaN(amount) || amount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Jumlah yang ditambahkan harus berupa angka positif',
+      });
+    }
+
+    // Verifikasi bahwa tabungan milik pengguna yang terautentikasi
+    const [savingCheck] = await pool.query('SELECT * FROM savings WHERE id = ? AND phone = ?', [savingId, phone]);
+
+    if (savingCheck.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Tabungan tidak ditemukan atau bukan milik Anda',
+      });
+    }
+
+    const saving = savingCheck[0];
+    const newAmount = parseInt(saving.terkumpul) + parseInt(amount);
+
+    // Update jumlah terkumpul
+    await pool.query('UPDATE savings SET terkumpul = ? WHERE id = ?', [newAmount, savingId]);
+
+    // Ambil data tabungan yang sudah diupdate
+    const [updatedSaving] = await pool.query('SELECT id, nama, deskripsi, target, terkumpul FROM savings WHERE id = ?', [savingId]);
+
+    res.json({
+      success: true,
+      message: 'Dana berhasil ditambahkan ke tabungan',
+      data: {
+        id: updatedSaving[0].id,
+        nama: updatedSaving[0].nama,
+        deskripsi: updatedSaving[0].deskripsi || '',
+        target: updatedSaving[0].target.toString(),
+        terkumpul: updatedSaving[0].terkumpul.toString(),
+      },
+    });
+  } catch (error) {
+    console.error('Add to savings error:', error);
     res.status(500).json({
       success: false,
-      message: 'Gagal memperbarui tabungan',
+      message: 'Gagal menambahkan dana ke tabungan',
     });
   }
 });
@@ -791,10 +1046,10 @@ app.get('/api/income-record', authenticateToken, async (req, res) => {
       `SELECT 
         i.id, 
         i.amount, 
+        i.date, 
+        i.type, 
         i.sender_phone, 
         u.name as sender_name,
-        i.type, 
-        i.date, 
         i.message
       FROM income i
       LEFT JOIN users u ON i.sender_phone = u.phone
@@ -807,6 +1062,8 @@ app.get('/api/income-record', authenticateToken, async (req, res) => {
     const formattedRecords = incomeRecords.map((record) => ({
       id: record.id,
       amount: record.amount ? parseInt(record.amount).toString() : '0',
+      date: record.date.toLocaleDateString('en-CA'),
+      type: record.type || 'normal',
       sender_phone: record.sender_phone ? record.sender_phone.toString() : '',
       sender_name: record.sender_name || 'Unknown',
       type: record.type || 'normal',
@@ -833,14 +1090,14 @@ app.post('/api/income-record', authenticateToken, async (req, res) => {
     // Validasi input
     if (!amount || !senderPhone || !type) {
       return res.status(400).json({
-        message: 'Data tidak lengkap. Amount, senderPhone, dan type diperlukan'
+        message: 'Data tidak lengkap. Amount, senderPhone, dan type diperlukan',
       });
     }
 
     // Validasi tipe income
     if (!['normal', 'gift', 'topup'].includes(type)) {
       return res.status(400).json({
-        message: 'Tipe income tidak valid. Pilih normal, gift, atau topup'
+        message: 'Tipe income tidak valid. Pilih normal, gift, atau topup',
       });
     }
 
@@ -848,7 +1105,7 @@ app.post('/api/income-record', authenticateToken, async (req, res) => {
     const [senderExists] = await pool.query('SELECT * FROM users WHERE phone = ?', [senderPhone]);
     if (senderExists.length === 0) {
       return res.status(404).json({
-        message: 'Pengirim dengan nomor telepon tersebut tidak ditemukan'
+        message: 'Pengirim dengan nomor telepon tersebut tidak ditemukan',
       });
     }
 
@@ -856,16 +1113,10 @@ app.post('/api/income-record', authenticateToken, async (req, res) => {
     const currentDate = new Date().toISOString().split('T')[0]; // Format YYYY-MM-DD
 
     // Tambahkan record income baru
-    const [result] = await pool.query(
-      'INSERT INTO income (amount, phone, sender_phone, type, date, message) VALUES (?, ?, ?, ?, ?, ?)',
-      [amount, userPhone, senderPhone, type, currentDate, message || null]
-    );
+    const [result] = await pool.query('INSERT INTO income (amount, phone, sender_phone, type, date, message) VALUES (?, ?, ?, ?, ?, ?)', [amount, userPhone, senderPhone, type, currentDate, message || null]);
 
     // Update saldo pengguna
-    await pool.query(
-      'UPDATE users SET balance = balance + ? WHERE phone = ?',
-      [amount, userPhone]
-    );
+    await pool.query('UPDATE users SET balance = balance + ? WHERE phone = ?', [amount, userPhone]);
 
     res.status(201).json({
       message: 'Income berhasil ditambahkan',
@@ -875,8 +1126,8 @@ app.post('/api/income-record', authenticateToken, async (req, res) => {
         date: currentDate,
         type: type,
         senderPhone: senderPhone.toString(),
-        message: message || null
-      }
+        message: message || null,
+      },
     });
   } catch (error) {
     console.error('Add income record error:', error);
@@ -947,26 +1198,24 @@ app.get('/api/expense-record', authenticateToken, async (req, res) => {
 
     // Join expense table with users table to get receiver names
     const [expenseRecords] = await pool.query(
-      `
-      SELECT 
+      `SELECT 
+        e.id,
         e.amount, 
         e.receiver_phone, 
-        u.name AS receiver, 
+        u.name AS receiver_name, 
         e.type, 
         e.date, 
         e.message
       FROM expense e
       LEFT JOIN users u ON e.receiver_phone = u.phone
       WHERE e.phone = ?
-      ORDER BY e.date DESC
-    `,
+      ORDER BY e.date DESC`,
       [phone]
     );
 
     // Get summary statistics
     const [summaryResults] = await pool.query(
-      `
-      SELECT 
+      `SELECT 
         SUM(amount) as total_expense,
         COUNT(*) as total_transactions,
         SUM(CASE WHEN type = 'normal' THEN amount ELSE 0 END) as total_normal,
@@ -979,25 +1228,20 @@ app.get('/api/expense-record', authenticateToken, async (req, res) => {
       [phone]
     );
 
-    const summary = {
-      total_expense: summaryResults[0].total_expense ? parseInt(summaryResults[0].total_expense).toString() : '0',
-      total_transactions: summaryResults[0].total_transactions,
-      total_normal: summaryResults[0].total_normal ? parseInt(summaryResults[0].total_normal).toString() : '0',
-      total_gift: summaryResults[0].total_gift ? parseInt(summaryResults[0].total_gift).toString() : '0',
-      count_normal: summaryResults[0].count_normal || 0,
-      count_gift: summaryResults[0].count_gift || 0,
-    };
-
     // Format the response data
     const formattedRecords = expenseRecords.map((record) => ({
-      amount: record.amount.toString(),
-      receiver: record.receiver || 'Unknown', // Handle case where receiver might not be in users table
-      type: record.type,
+      id: record.id,
+      amount: record.amount ? parseInt(record.amount).toString() : '0',
+      receiver_phone: record.receiver_phone ? record.receiver_phone.toString() : '',
+      receiver_name: record.receiver_name || 'Unknown',
+      type: record.type || 'normal',
+      date: record.date.toLocaleDateString('en-CA'),
       message: record.message || '',
     }));
 
     res.json({
-      summary: summary,
+      success: true,
+      message: 'Data pengeluaran berhasil diambil',
       records: formattedRecords,
     });
   } catch (error) {
@@ -1015,21 +1259,21 @@ app.post('/api/expense-record', authenticateToken, async (req, res) => {
     // Validasi input
     if (!amount || !receiverPhone || !type) {
       return res.status(400).json({
-        message: 'Jumlah, nomor telepon penerima, dan tipe transaksi diperlukan'
+        message: 'Jumlah, nomor telepon penerima, dan tipe transaksi diperlukan',
       });
     }
 
     // Validasi tipe transaksi
     if (!['normal', 'gift'].includes(type)) {
       return res.status(400).json({
-        message: 'Tipe transaksi harus berupa "normal" atau "gift"'
+        message: 'Tipe transaksi harus berupa "normal" atau "gift"',
       });
     }
 
     // Validasi jumlah harus positif
     if (amount <= 0) {
       return res.status(400).json({
-        message: 'Jumlah harus lebih dari 0'
+        message: 'Jumlah harus lebih dari 0',
       });
     }
 
@@ -1038,16 +1282,16 @@ app.post('/api/expense-record', authenticateToken, async (req, res) => {
 
     if (receiverExists.length === 0) {
       return res.status(404).json({
-        message: 'Penerima dengan nomor telepon tersebut tidak ditemukan'
+        message: 'Penerima dengan nomor telepon tersebut tidak ditemukan',
       });
     }
 
     // Cek saldo pengirim
     const [senderData] = await pool.query('SELECT balance FROM users WHERE phone = ?', [userPhone]);
-    
+
     if (senderData[0].balance < amount) {
       return res.status(400).json({
-        message: 'Saldo tidak mencukupi untuk melakukan transaksi ini'
+        message: 'Saldo tidak mencukupi untuk melakukan transaksi ini',
       });
     }
 
@@ -1060,28 +1304,16 @@ app.post('/api/expense-record', authenticateToken, async (req, res) => {
       const currentDate = new Date().toISOString().split('T')[0]; // Format YYYY-MM-DD
 
       // Catat pengeluaran (expense)
-      const [expenseResult] = await connection.query(
-        'INSERT INTO expense (amount, phone, receiver_phone, type, date, message) VALUES (?, ?, ?, ?, ?, ?)',
-        [amount, userPhone, receiverPhone, type, currentDate, message || null]
-      );
+      const [expenseResult] = await connection.query('INSERT INTO expense (amount, phone, receiver_phone, type, date, message) VALUES (?, ?, ?, ?, ?, ?)', [amount, userPhone, receiverPhone, type, currentDate, message || null]);
 
       // Catat pemasukan (income) untuk penerima
-      await connection.query(
-        'INSERT INTO income (amount, phone, sender_phone, type, date, message) VALUES (?, ?, ?, ?, ?, ?)',
-        [amount, receiverPhone, userPhone, type, currentDate, message || null]
-      );
+      await connection.query('INSERT INTO income (amount, phone, sender_phone, type, date, message) VALUES (?, ?, ?, ?, ?, ?)', [amount, receiverPhone, userPhone, type, currentDate, message || null]);
 
       // Update saldo pengirim (kurangi)
-      await connection.query(
-        'UPDATE users SET balance = balance - ? WHERE phone = ?',
-        [amount, userPhone]
-      );
+      await connection.query('UPDATE users SET balance = balance - ? WHERE phone = ?', [amount, userPhone]);
 
       // Update saldo penerima (tambah)
-      await connection.query(
-        'UPDATE users SET balance = balance + ? WHERE phone = ?',
-        [amount, receiverPhone]
-      );
+      await connection.query('UPDATE users SET balance = balance + ? WHERE phone = ?', [amount, receiverPhone]);
 
       // Commit transaksi
       await connection.commit();
@@ -1097,8 +1329,8 @@ app.post('/api/expense-record', authenticateToken, async (req, res) => {
           date: currentDate,
           type: type,
           receiver_phone: receiverPhone,
-          message: message || null
-        }
+          message: message || null,
+        },
       });
     } catch (error) {
       // Rollback jika terjadi error
