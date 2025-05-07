@@ -852,6 +852,72 @@ app.delete('/api/savings/:id', authenticateToken, async (req, res) => {
   }
 });
 
+// Withdraw saving (move to balance and delete saving)
+app.post('/api/savings/:id/withdraw', authenticateToken, async (req, res) => {
+  try {
+    const userPhone = req.user.phone;
+    const savingId = req.params.id;
+
+    // Validasi ID
+    if (!savingId || isNaN(parseInt(savingId))) {
+      return res.status(400).json({ message: 'ID tabungan tidak valid' });
+    }
+
+    // Cek apakah tabungan ada dan milik user
+    const [savingRows] = await pool.query(
+      'SELECT * FROM savings WHERE id = ? AND phone = ?',
+      [savingId, userPhone]
+    );
+
+    if (savingRows.length === 0) {
+      return res.status(404).json({ message: 'Tabungan tidak ditemukan' });
+    }
+
+    const saving = savingRows[0];
+
+    // Cek apakah tabungan sudah mencapai target
+    if (saving.terkumpul < saving.target) {
+      return res.status(400).json({ 
+        message: 'Tabungan belum mencapai target',
+        current: saving.terkumpul,
+        target: saving.target
+      });
+    }
+
+    // Mulai transaksi
+    const connection = await pool.getConnection();
+    await connection.beginTransaction();
+
+    try {
+      // Update balance user
+      await connection.query(
+        'UPDATE users SET balance = balance + ? WHERE phone = ?',
+        [saving.terkumpul, userPhone]
+      );
+
+      // Hapus tabungan
+      await connection.query('DELETE FROM savings WHERE id = ?', [savingId]);
+
+      // Commit transaksi
+      await connection.commit();
+
+      res.status(200).json({
+        message: 'Dana tabungan berhasil ditarik ke saldo utama',
+        amount: saving.terkumpul
+      });
+    } catch (error) {
+      // Rollback jika terjadi error
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  } catch (error) {
+    console.error('Error withdrawing saving:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 // Endpoint untuk mengupdate target tabungan
 app.patch('/api/savings/:id/update-target', authenticateToken, async (req, res) => {
   try {
