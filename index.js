@@ -813,42 +813,67 @@ app.patch('/api/savings/:id/add', authenticateToken, async (req, res) => {
 // Delete savings record
 app.delete('/api/savings/:id', authenticateToken, async (req, res) => {
   try {
-    const phone = req.user.phone;
-    const savingsId = req.params.id;
+    const savingId = req.params.id;
+    const userPhone = req.user.phone;
 
-    // Check if the savings record exists and belongs to the user
-    const [savings] = await pool.query('SELECT * FROM savings WHERE id = ? AND phone = ?', [savingsId, phone]);
+    // Dapatkan data tabungan sebelum dihapus
+    const [savingRows] = await pool.query(
+      'SELECT * FROM savings WHERE id = ? AND phone = ?',
+      [savingId, userPhone]
+    );
 
-    if (savings.length === 0) {
+    if (savingRows.length === 0) {
       return res.status(404).json({
-        success: false,
-        message: 'Data tabungan tidak ditemukan atau bukan milik Anda',
+        message: 'Tabungan tidak ditemukan atau bukan milik Anda',
       });
     }
 
-    // Save the data before deletion for response
-    const deletedSavings = {
-      id: savings[0].id,
-      nama: savings[0].nama,
-      deskripsi: savings[0].deskripsi || '',
-      target: savings[0].target.toString(),
-      terkumpul: savings[0].terkumpul.toString(),
-    };
+    const saving = savingRows[0];
+    const amountToAdd = saving.terkumpul; // Jumlah yang akan ditambahkan ke saldo
 
-    // Delete the savings record
-    await pool.query('DELETE FROM savings WHERE id = ? AND phone = ?', [savingsId, phone]);
+    // Mulai transaksi database
+    const connection = await pool.getConnection();
+    await connection.beginTransaction();
 
-    res.json({
-      success: true,
-      message: 'Tabungan berhasil dihapus',
-      data: deletedSavings,
-    });
+    try {
+      // Update saldo user
+      await connection.query(
+        'UPDATE users SET balance = balance + ? WHERE phone = ?',
+        [amountToAdd, userPhone]
+      );
+
+      // Hapus tabungan
+      await connection.query(
+        'DELETE FROM savings WHERE id = ? AND phone = ?',
+        [savingId, userPhone]
+      );
+
+      // Tambahkan catatan pemasukan jika ada jumlah yang ditambahkan
+      if (amountToAdd > 0) {
+        const today = new Date().toISOString().split('T')[0]; // Format YYYY-MM-DD
+        await connection.query(
+          'INSERT INTO income (amount, phone, sender_phone, type, date, message) VALUES (?, ?, ?, ?, ?, ?)',
+          [amountToAdd, userPhone, userPhone, 'topup', today, `Penarikan dari tabungan: ${saving.nama}`]
+        );
+      }
+
+      // Commit transaksi
+      await connection.commit();
+
+      res.status(200).json({
+        message: 'Tabungan berhasil dihapus dan saldo ditambahkan',
+        amountAdded: amountToAdd,
+      });
+    } catch (error) {
+      // Rollback jika terjadi error
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
   } catch (error) {
-    console.error('Delete savings error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Gagal menghapus tabungan',
-    });
+    console.error('Error deleting saving:', error);
+    res.status(500).json({ message: 'Server error' });
   }
 });
 
