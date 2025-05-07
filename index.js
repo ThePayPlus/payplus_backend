@@ -606,24 +606,48 @@ app.patch('/api/change-password', authenticateToken, async (req, res) => {
 // Savings endpoints
 app.post('/api/savings', authenticateToken, async (req, res) => {
   try {
-    const phone = req.user.phone;
-    const { nama, deskripsi, target, terkumpul = 0 } = req.body;
+    const { nama, deskripsi, target, terkumpul = 0, deductFromBalance } = req.body;
+    const userPhone = req.user.phone;
 
     if (!nama || !target) {
       return res.status(400).json({
-        message: 'Kolom nama dan target harus diisi',
+        message: 'Name and savings target must be filled in'
       });
     }
 
+    // If collected > 0 and deductFromBalance is true, deduct the user's balance
+    if (terkumpul > 0 && deductFromBalance) {
+      // Check balance
+      const [userRows] = await pool.query('SELECT balance FROM users WHERE phone = ?', [userPhone]);
+      
+      if (userRows.length === 0) {
+        return res.status(404).json({
+          message: 'User not found'
+        });
+      }
+      
+      const userBalance = userRows[0].balance;
+      
+      // Check balance
+      if (userBalance < terkumpul) {
+        return res.status(400).json({
+          message: 'Insufficient balance to create a savings account with that initial amount'
+        });
+      }
+      
+      // Deduct balance
+      await pool.query('UPDATE users SET balance = balance - ? WHERE phone = ?', [terkumpul, userPhone]);
+    }
+
     // Insert the new savings record
-    const [result] = await pool.query('INSERT INTO savings (phone, nama, deskripsi, target, terkumpul) VALUES (?, ?, ?, ?, ?)', [phone, nama, deskripsi, target, terkumpul]);
+    const [result] = await pool.query('INSERT INTO savings (phone, nama, deskripsi, target, terkumpul) VALUES (?, ?, ?, ?, ?)', [userPhone, nama, deskripsi, target, terkumpul]);
 
     // Get the inserted savings record to return in response
     const [newSavings] = await pool.query('SELECT id, nama, deskripsi, target, terkumpul FROM savings WHERE id = ?', [result.insertId]);
 
     res.status(201).json({
       success: true,
-      message: 'Tabungan berhasil ditambahkan',
+      message: 'Savings successfully added',
       data: {
         id: newSavings[0].id,
         nama: newSavings[0].nama,
@@ -636,7 +660,7 @@ app.post('/api/savings', authenticateToken, async (req, res) => {
     console.error('Create savings error:', error);
     res.status(500).json({
       success: false,
-      message: 'Gagal menambahkan tabungan',
+      message: 'Failed to add savings',
     });
   }
 });
@@ -649,7 +673,7 @@ app.get('/api/savings/summary', authenticateToken, async (req, res) => {
     const [users] = await pool.query('SELECT * FROM users WHERE phone = ?', [phone]);
 
     if (users.length === 0) {
-      return res.status(404).json({ message: 'Pengguna tidak ditemukan' });
+      return res.status(404).json({ message: 'User not found' });
     }
 
     // Get savings summary
@@ -665,7 +689,7 @@ app.get('/api/savings/summary', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('Get savings summary error:', error);
-    res.status(500).json({ message: 'Gagal mengambil data tabungan' });
+    res.status(500).json({ message: 'Failed to retrieve savings data' });
   }
 });
 
@@ -722,7 +746,7 @@ app.get('/api/savings', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('Get savings error:', error);
-    res.status(500).json({ message: 'Gagal mengambil data tabungan' });
+    res.status(500).json({ message: 'Failed to retrieve savings data' });
   }
 });
 
@@ -737,7 +761,7 @@ app.patch('/api/savings/:id', authenticateToken, async (req, res) => {
     const [savingsCheck] = await pool.query('SELECT * FROM savings WHERE id = ? AND phone = ?', [savingsId, phone]);
 
     if (savingsCheck.length === 0) {
-      return res.status(404).json({ message: 'Tabungan tidak ditemukan atau bukan milik Anda' });
+      return res.status(404).json({ message: 'Savings not found' });
     }
 
     // Update savings
@@ -748,51 +772,70 @@ app.patch('/api/savings/:id', authenticateToken, async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Tabungan berhasil diperbarui',
+      message: 'Savings successfully updated',
       data: updatedSavings[0],
     });
   } catch (error) {
     console.error('Update savings error:', error);
-    res.status(500).json({ message: 'Gagal memperbarui tabungan' });
+    res.status(500).json({ message: 'Failed to update savings' });
   }
 });
 
 // Add amount to savings
 app.patch('/api/savings/:id/add', authenticateToken, async (req, res) => {
   try {
-    const phone = req.user.phone;
+    const userPhone = req.user.phone;
     const savingId = req.params.id;
-    const { amount } = req.body;
+    const { amount, deductFromBalance = false } = req.body;
 
     if (!amount || isNaN(amount) || amount <= 0) {
       return res.status(400).json({
         success: false,
-        message: 'Jumlah yang ditambahkan harus berupa angka positif',
+        message: 'The amount added must be a positive number',
       });
     }
 
-    // Verifikasi bahwa tabungan milik pengguna yang terautentikasi
-    const [savingCheck] = await pool.query('SELECT * FROM savings WHERE id = ? AND phone = ?', [savingId, phone]);
+    // Verify savings
+    const [savingCheck] = await pool.query('SELECT * FROM savings WHERE id = ? AND phone = ?', [savingId, userPhone]);
 
     if (savingCheck.length === 0) {
       return res.status(404).json({
         success: false,
-        message: 'Tabungan tidak ditemukan atau bukan milik Anda',
+        message: 'Savings not found',
       });
+    }
+
+    if (deductFromBalance) {
+      // Get balance
+      const [users] = await pool.query('SELECT balance FROM users WHERE phone = ?', [userPhone]);
+      
+      if (users.length === 0) {
+        return res.status(404).json({ message: 'Pengguna tidak ditemukan' });
+      }
+      
+      const userBalance = users[0].balance;
+      
+      // Check balance
+      if (userBalance < amount) {
+        return res.status(400).json({ message: 'Saldo tidak mencukupi' });
+      }
+      
+      // Deduct balance
+      await pool.query('UPDATE users SET balance = balance - ? WHERE phone = ?', [amount, userPhone]);
     }
 
     const saving = savingCheck[0];
     const newAmount = parseInt(saving.terkumpul) + parseInt(amount);
 
-    // Update jumlah terkumpul
+    // Update collected amount
     await pool.query('UPDATE savings SET terkumpul = ? WHERE id = ?', [newAmount, savingId]);
 
-    // Ambil data tabungan yang sudah diupdate
+    // Get updated savings
     const [updatedSaving] = await pool.query('SELECT id, nama, deskripsi, target, terkumpul FROM savings WHERE id = ?', [savingId]);
 
     res.json({
       success: true,
-      message: 'Dana berhasil ditambahkan ke tabungan',
+      message: 'Funds are successfully added to savings',
       data: {
         id: updatedSaving[0].id,
         nama: updatedSaving[0].nama,
@@ -800,12 +843,13 @@ app.patch('/api/savings/:id/add', authenticateToken, async (req, res) => {
         target: updatedSaving[0].target.toString(),
         terkumpul: updatedSaving[0].terkumpul.toString(),
       },
+      balanceDeducted: deductFromBalance
     });
   } catch (error) {
     console.error('Add to savings error:', error);
     res.status(500).json({
       success: false,
-      message: 'Gagal menambahkan dana ke tabungan',
+      message: 'Failed to add funds to savings',
     });
   }
 });
@@ -816,7 +860,7 @@ app.delete('/api/savings/:id', authenticateToken, async (req, res) => {
     const savingId = req.params.id;
     const userPhone = req.user.phone;
 
-    // Dapatkan data tabungan sebelum dihapus
+    // Get data before deleting
     const [savingRows] = await pool.query(
       'SELECT * FROM savings WHERE id = ? AND phone = ?',
       [savingId, userPhone]
@@ -829,43 +873,43 @@ app.delete('/api/savings/:id', authenticateToken, async (req, res) => {
     }
 
     const saving = savingRows[0];
-    const amountToAdd = saving.terkumpul; // Jumlah yang akan ditambahkan ke saldo
+    const amountToAdd = saving.terkumpul;
 
-    // Mulai transaksi database
+    // Start transaction
     const connection = await pool.getConnection();
     await connection.beginTransaction();
 
     try {
-      // Update saldo user
+      // Update balance
       await connection.query(
         'UPDATE users SET balance = balance + ? WHERE phone = ?',
         [amountToAdd, userPhone]
       );
 
-      // Hapus tabungan
+      // Delete savings
       await connection.query(
         'DELETE FROM savings WHERE id = ? AND phone = ?',
         [savingId, userPhone]
       );
 
-      // Tambahkan catatan pemasukan jika ada jumlah yang ditambahkan
+      // Add as income
       if (amountToAdd > 0) {
         const today = new Date().toISOString().split('T')[0]; // Format YYYY-MM-DD
         await connection.query(
           'INSERT INTO income (amount, phone, sender_phone, type, date, message) VALUES (?, ?, ?, ?, ?, ?)',
-          [amountToAdd, userPhone, userPhone, 'topup', today, `Penarikan dari tabungan: ${saving.nama}`]
+          [amountToAdd, userPhone, userPhone, 'normal', today, `Withdraw from: ${saving.nama}`]
         );
       }
 
-      // Commit transaksi
+      // Commit transaction
       await connection.commit();
 
       res.status(200).json({
-        message: 'Tabungan berhasil dihapus dan saldo ditambahkan',
+        message: 'Savings successfully deleted and balance added',
         amountAdded: amountToAdd,
       });
     } catch (error) {
-      // Rollback jika terjadi error
+      // Rollback if error
       await connection.rollback();
       throw error;
     } finally {
@@ -880,70 +924,66 @@ app.delete('/api/savings/:id', authenticateToken, async (req, res) => {
 // Withdraw saving (move to balance and delete saving)
 app.post('/api/savings/:id/withdraw', authenticateToken, async (req, res) => {
   try {
-    const userPhone = req.user.phone;
     const savingId = req.params.id;
+    const userPhone = req.user.phone;
 
-    // Validasi ID
-    if (!savingId || isNaN(parseInt(savingId))) {
-      return res.status(400).json({ message: 'ID tabungan tidak valid' });
-    }
-
-    // Cek apakah tabungan ada dan milik user
+    // Get saving details first
     const [savingRows] = await pool.query(
       'SELECT * FROM savings WHERE id = ? AND phone = ?',
       [savingId, userPhone]
     );
 
     if (savingRows.length === 0) {
-      return res.status(404).json({ message: 'Tabungan tidak ditemukan' });
-    }
-
-    const saving = savingRows[0];
-
-    // Cek apakah tabungan sudah mencapai target
-    if (saving.terkumpul < saving.target) {
-      return res.status(400).json({ 
-        message: 'Tabungan belum mencapai target',
-        current: saving.terkumpul,
-        target: saving.target
+      return res.status(404).json({
+        message: 'Savings not found',
       });
     }
 
-    // Mulai transaksi
+    const saving = savingRows[0];
+    const amount = saving.terkumpul;
+
+    // Begin transaction
     const connection = await pool.getConnection();
     await connection.beginTransaction();
 
     try {
-      // Update balance user
+      // 1. Add to user balance
       await connection.query(
         'UPDATE users SET balance = balance + ? WHERE phone = ?',
-        [saving.terkumpul, userPhone]
+        [amount, userPhone]
       );
 
-      // Hapus tabungan
+      // 2. Create income record
+      const today = new Date().toISOString().split('T')[0]; // Format: YYYY-MM-DD
+      await connection.query(
+        'INSERT INTO income (amount, phone, sender_phone, type, date, message) VALUES (?, ?, ?, ?, ?, ?)',
+        [amount, userPhone, userPhone, 'normal', today, `Withdraw from: ${saving.nama}`]
+      );
+
+      // 3. Delete the saving
       await connection.query('DELETE FROM savings WHERE id = ?', [savingId]);
 
-      // Commit transaksi
+      // Commit transaction
       await connection.commit();
 
       res.status(200).json({
-        message: 'Dana tabungan berhasil ditarik ke saldo utama',
-        amount: saving.terkumpul
+        message: 'Savings successfully withdrawn and deleted',
+        amount: amount,
       });
     } catch (error) {
-      // Rollback jika terjadi error
+      // Rollback if error
       await connection.rollback();
       throw error;
     } finally {
       connection.release();
     }
   } catch (error) {
-    console.error('Error withdrawing saving:', error);
+    console.error('Withdraw savings error:', error);
     res.status(500).json({ message: 'Server error' });
   }
 });
 
-// Endpoint untuk mengupdate target tabungan
+// Endpoint for updating savings target
 app.patch('/api/savings/:id/update-target', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
@@ -953,26 +993,26 @@ app.patch('/api/savings/:id/update-target', authenticateToken, async (req, res) 
     if (!id || !target) {
       return res.status(400).json({
         success: false,
-        message: 'ID tabungan dan target baru diperlukan',
+        message: 'Savings ID and new target required',
       });
     }
 
-    // Verifikasi bahwa tabungan ini milik pengguna yang sedang login
+    // Verify savings
     const [savingExists] = await pool.query('SELECT * FROM savings WHERE id = ? AND phone = ?', [id, phone]);
 
     if (savingExists.length === 0) {
       return res.status(404).json({
         success: false,
-        message: 'Tabungan tidak ditemukan atau bukan milik Anda',
+        message: 'Savings not found',
       });
     }
 
-    // Update target tabungan
+    // Update target
     await pool.query('UPDATE savings SET target = ? WHERE id = ?', [target, id]);
 
     res.status(200).json({
       success: true,
-      message: 'Target tabungan berhasil diperbarui',
+      message: 'Savings target updated successfully',
     });
   } catch (error) {
     console.error('Update savings target error:', error);
