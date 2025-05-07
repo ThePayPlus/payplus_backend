@@ -17,7 +17,7 @@ app.use(cookieParser());
 app.use(
   cors({
     origin: '*', // Ubah ke URL frontend Anda
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true, // Enable credentials (cookies, authorization headers, etc.)
   })
@@ -162,7 +162,7 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-// Logout endpoint
+//## LOGOUT
 app.post('/api/auth/logout', (req, res) => {
   res.clearCookie('token');
   res.json({ message: 'Logout berhasil' });
@@ -291,33 +291,31 @@ app.get('/api/friends', authenticateToken, async (req, res) => {
   }
 });
 
-// Profile endpoint
+//## API UNTUK GET PROFILE
 app.get('/api/profile', authenticateToken, async (req, res) => {
   try {
-    const phone = req.user.phone;
+    const { phone } = req.user;
 
-    const [rows] = await pool.query('SELECT phone, name, email, balance FROM users WHERE phone = ?', [phone]);
+    const [[user]] = await pool.query(
+      'SELECT phone, name, email, balance FROM users WHERE phone = ?',
+      [phone]
+    );
 
-    if (rows.length === 0) {
-      return res.status(404).json({ message: 'Pengguna tidak ditemukan.' });
-    }
+    const [[{ total_income = 0 }]] = await pool.query(
+      'SELECT SUM(amount) AS total_income FROM income WHERE phone = ?',
+      [phone]
+    );
 
-    // Mendapatkan total income
-    const [incomeResult] = await pool.query('SELECT SUM(amount) as total_income FROM income WHERE phone = ?', [phone]);
-
-    // Mendapatkan total expense
-    const [expenseResult] = await pool.query('SELECT SUM(amount) as total_expense FROM expense WHERE phone = ?', [phone]);
-
-    const totalIncome = incomeResult[0].total_income || 0;
-    const totalExpense = expenseResult[0].total_expense || 0;
+    const [[{ total_expense = 0 }]] = await pool.query(
+      'SELECT SUM(amount) AS total_expense FROM expense WHERE phone = ?',
+      [phone]
+    );
 
     res.json({
-      phone: rows[0].phone,
-      name: rows[0].name,
-      email: rows[0].email,
-      balance: parseFloat(rows[0].balance),
-      total_income: parseFloat(totalIncome),
-      total_expense: parseFloat(totalExpense),
+      ...user,
+      balance: parseFloat(user.balance),
+      total_income: parseFloat(total_income),
+      total_expense: parseFloat(total_expense),
     });
   } catch (error) {
     console.error('Profile error:', error);
@@ -325,121 +323,58 @@ app.get('/api/profile', authenticateToken, async (req, res) => {
   }
 });
 
-// Update profile endpoint
+//## API UNTUK UPDATE PROFILE
 app.patch('/api/profile', authenticateToken, async (req, res) => {
   try {
-    const phone = req.user.phone;
     const { name, email } = req.body;
+    const phone = req.user.phone;
 
-    // Validate that at least one field is provided
-    if (!name && !email) {
+    if (!name || !email) {
       return res.status(400).json({
-        message: 'Setidaknya satu field (name atau email) harus diisi untuk update',
+        message: 'Field name dan email harus diisi untuk update',
       });
     }
+    await pool.query(
+      'UPDATE users SET name = ?, email = ? WHERE phone = ?',
+      [name, email, phone]
+    );
 
-    // Check if user exists
-    const [userCheck] = await pool.query('SELECT * FROM users WHERE phone = ?', [phone]);
-
-    if (userCheck.length === 0) {
-      return res.status(404).json({ message: 'Pengguna tidak ditemukan.' });
-    }
-
-    // Build update query dynamically based on provided fields
-    let updateQuery = 'UPDATE users SET ';
-    const updateValues = [];
-
-    if (name) {
-      updateQuery += 'name = ?';
-      updateValues.push(name);
-    }
-
-    if (email) {
-      if (name) updateQuery += ', '; // Add comma if name was added
-      updateQuery += 'email = ?';
-      updateValues.push(email);
-    }
-
-    updateQuery += ' WHERE phone = ?';
-    updateValues.push(phone);
-
-    // Execute update query
-    await pool.query(updateQuery, updateValues);
-
-    // Get updated user data
-    const [updatedUser] = await pool.query('SELECT phone, name, email, balance FROM users WHERE phone = ?', [phone]);
-
-    res.json({
-      message: 'Profil berhasil diperbarui',
-      data: {
-        name: updatedUser[0].name,
-        email: updatedUser[0].email,
-      },
-    });
+    res.json({ message: 'Profil berhasil diperbarui' });
   } catch (error) {
     console.error('Update profile error:', error);
     res.status(500).json({ message: 'Server error' });
   }
 });
 
-// Change password endpoint
+//## API UNTUK GANTI PASSWORD
 app.patch('/api/change-password', authenticateToken, async (req, res) => {
   try {
-    const phone = req.user.phone;
     const { oldPassword, newPassword } = req.body;
+    const phone = req.user.phone;
 
-    // Validate request
     if (!oldPassword || !newPassword) {
       return res.status(400).json({
         message: 'Password lama dan password baru harus diisi',
       });
     }
 
-    // Check if new password meets requirements
-    if (newPassword.length < 6) {
-      return res.status(400).json({
-        message: 'Password baru harus minimal 6 karakter',
-      });
-    }
-
-    // Get user data to verify old password
-    const [users] = await pool.query('SELECT * FROM users WHERE phone = ?', [phone]);
-
-    if (users.length === 0) {
-      return res.status(404).json({ message: 'Pengguna tidak ditemukan' });
-    }
+    const [users] = await pool.query('SELECT password FROM users WHERE phone = ?', [phone]);
 
     const user = users[0];
-
-    // Verify old password
-    const isHashed = user.password.startsWith('$2b$') || user.password.startsWith('$2a$');
-    let isOldPasswordValid = false;
-
-    if (isHashed) {
-      // Compare with hashed password
-      isOldPasswordValid = await bcrypt.compare(oldPassword, user.password);
-    } else {
-      // Direct comparison for legacy passwords
-      isOldPasswordValid = user.password === oldPassword;
-    }
-
-    if (!isOldPasswordValid) {
+    const isValid = await bcrypt.compare(oldPassword, user.password);
+    if (!isValid) {
       return res.status(401).json({ message: 'Password lama tidak valid' });
     }
 
-    // Hash new password
-    const saltRounds = 10;
-    const hashedNewPassword = await bcrypt.hash(newPassword, saltRounds);
-
-    // Update password
-    await pool.query('UPDATE users SET password = ? WHERE phone = ?', [hashedNewPassword, phone]);
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    await pool.query('UPDATE users SET password = ? WHERE phone = ?', [hashedPassword, phone]);
 
     res.json({ message: 'Password berhasil diubah' });
   } catch (error) {
-    console.error('Change password error:', error);
     res.status(500).json({ message: 'Server error' });
   }
 });
+
 
 // Savings endpoints
 app.post('/api/savings', authenticateToken, async (req, res) => {
@@ -846,7 +781,7 @@ app.get('/api/transactions', authenticateToken, async (req, res) => {
   }
 });
 
-// Income record endpoint
+//## GET INCOME RECORDS
 app.get('/api/income-record', authenticateToken, async (req, res) => {
   try {
     const phone = req.user.phone;
@@ -875,17 +810,16 @@ app.get('/api/income-record', authenticateToken, async (req, res) => {
       sender_phone: record.sender_phone ? record.sender_phone.toString() : '',
       sender_name: record.sender_name || 'Unknown',
       type: record.type || 'normal',
-      date: record.date || new Date().toISOString().split('T')[0],
+      date: record.date.toLocaleDateString('en-CA'),
       message: record.message || '',
     }));
 
     res.json({
       success: true,
       message: 'Data pemasukan berhasil diambil',
-      records: formattedRecords,
+      records: formattedRecords ??[],
     });
   } catch (error) {
-    console.error('Get income records error:', error);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -1453,25 +1387,20 @@ app.post('/api/topup', authenticateToken, async (req, res) => {
   }
 });
 
-// Recent transactions endpoint
+//## RECENT TRANSACTIONS
 app.get('/api/recent-transactions', authenticateToken, async (req, res) => {
   try {
     const phone = req.user.phone;
 
-    // Get recent income transactions with sender names
     const [incomeRecords] = await pool.query(
       `
       SELECT 
         i.id,
         i.amount, 
-        i.sender_phone, 
-        u.name AS sender_name, 
         i.type, 
         i.date, 
-        i.message,
         'income' AS transaction_type
       FROM income i
-      LEFT JOIN users u ON i.sender_phone = u.phone
       WHERE i.phone = ?
       ORDER BY i.date DESC, i.id DESC
       LIMIT 5
@@ -1479,20 +1408,15 @@ app.get('/api/recent-transactions', authenticateToken, async (req, res) => {
       [phone]
     );
 
-    // Get recent expense transactions with receiver names
     const [expenseRecords] = await pool.query(
       `
       SELECT 
         e.id,
         e.amount, 
-        e.receiver_phone, 
-        u.name AS receiver_name, 
         e.type, 
         e.date, 
-        e.message,
         'expense' AS transaction_type
       FROM expense e
-      LEFT JOIN users u ON e.receiver_phone = u.phone
       WHERE e.phone = ?
       ORDER BY e.date DESC, e.id DESC
       LIMIT 5
@@ -1500,42 +1424,24 @@ app.get('/api/recent-transactions', authenticateToken, async (req, res) => {
       [phone]
     );
 
-    // Combine and format the response data
-    const formattedIncome = incomeRecords.map((record) => ({
-      id: record.id,
+    const formatRecord = (record) => ({
       amount: record.amount.toString(),
-      otherParty: record.sender_name || 'Unknown',
-      otherPartyPhone: record.sender_phone.toString(),
       type: record.type,
-      date: formatDate(record.date),
-      message: record.message || '',
+      date: record.date.toLocaleDateString('en-CA'),
       transactionType: record.transaction_type,
-    }));
+    });
 
-    const formattedExpense = expenseRecords.map((record) => ({
-      id: record.id,
-      amount: record.amount.toString(),
-      otherParty: record.receiver_name || 'Unknown',
-      otherPartyPhone: record.receiver_phone.toString(),
-      type: record.type,
-      date: formatDate(record.date),
-      message: record.message || '',
-      transactionType: record.transaction_type,
-    }));
-
-    // Combine both types, sort by date (most recent first), and limit to 5
-    const allTransactions = [...formattedIncome, ...formattedExpense]
+    const allTransactions = [...incomeRecords, ...expenseRecords]
       .sort((a, b) => {
-        // Sort by date first (newest first)
         const dateCompare = new Date(b.date) - new Date(a.date);
-        // If dates are the same, sort by ID (newest first, assuming higher ID = newer)
         return dateCompare !== 0 ? dateCompare : b.id - a.id;
       })
-      .slice(0, 5);
+      .slice(0, 5)
+      .map(formatRecord);
 
     res.json({
       success: true,
-      data: allTransactions,
+      records: allTransactions,
     });
   } catch (error) {
     console.error('Recent transactions error:', error);
@@ -1545,6 +1451,7 @@ app.get('/api/recent-transactions', authenticateToken, async (req, res) => {
     });
   }
 });
+
 
 // Initialize database and start server
 initializeDb()
