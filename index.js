@@ -1597,6 +1597,37 @@ app.get('/api/search-user/:phone', authenticateToken, async (req, res) => {
   }
 });
 
+// Search user by phone
+app.get('/api/users/search', authenticateToken, async (req, res) => {
+  try {
+    const { phone } = req.query;
+
+    if (!phone) {
+      return res.status(400).json({ 
+        message: 'Nomor telepon diperlukan untuk pencarian' 
+      });
+    }
+
+    // Cari pengguna berdasarkan nomor telepon
+    const [rows] = await pool.query(
+      'SELECT phone, name, email FROM users WHERE phone = ?',
+      [phone]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ 
+        message: 'Pengguna tidak ditemukan' 
+      });
+    }
+
+    // Kembalikan data pengguna yang ditemukan (tanpa password)
+    res.status(200).json(rows[0]);
+  } catch (error) {
+    console.error('Search user error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 // Test endpoint to check headers and cookies
 app.get('/api/test-headers', (req, res) => {
   console.log('Received headers:', req.headers);
