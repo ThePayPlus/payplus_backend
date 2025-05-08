@@ -1855,6 +1855,68 @@ app.get('/api/recent-transactions', authenticateToken, async (req, res) => {
   }
 });
 
+// ## HISTORY
+app.get('/api/transaction-history', authenticateToken, async (req, res) => {
+  try {
+    const phone = req.user.phone;
+
+    const [incomeRecords] = await pool.query(
+      `
+      SELECT 
+        i.id,
+        i.amount, 
+        i.type, 
+        i.date, 
+        'income' AS transaction_type
+      FROM income i
+      WHERE i.phone = ?
+      ORDER BY i.date DESC, i.id DESC
+    `,
+      [phone]
+    );
+
+    const [expenseRecords] = await pool.query(
+      `
+      SELECT 
+        e.id,
+        e.amount, 
+        e.type, 
+        e.date, 
+        'expense' AS transaction_type
+      FROM expense e
+      WHERE e.phone = ?
+      ORDER BY e.date DESC, e.id DESC
+    `,
+      [phone]
+    );
+
+    const formatRecord = (record) => ({
+      amount: record.amount.toString(),
+      type: record.type,
+      date: record.date.toLocaleDateString('en-CA'),
+      transactionType: record.transaction_type,
+    });
+
+    const allTransactions = [...incomeRecords, ...expenseRecords]
+      .sort((a, b) => {
+        const dateCompare = new Date(b.date) - new Date(a.date);
+        return dateCompare !== 0 ? dateCompare : b.id - a.id;
+      })
+      .map(formatRecord);
+
+    res.json({
+      success: true,
+      records: allTransactions,
+    });
+  } catch (error) {
+    console.error('Transaction histories error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Gagal mengambil data histori transaksi',
+    });
+  }
+});
+
 
 // Initialize database and start server
 initializeDb()
