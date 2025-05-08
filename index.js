@@ -197,7 +197,7 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-// Logout endpoint
+//## LOGOUT
 app.post('/api/auth/logout', (req, res) => {
   res.clearCookie('token');
   res.json({ message: 'Logout berhasil' });
@@ -601,32 +601,22 @@ app.get('/api/messages/:friendPhone', authenticateToken, async (req, res) => {
 });
 
 // Profile endpoint
+//## API UNTUK GET PROFILE
 app.get('/api/profile', authenticateToken, async (req, res) => {
   try {
-    const phone = req.user.phone;
+    const { phone } = req.user;
 
-    const [rows] = await pool.query('SELECT phone, name, email, balance FROM users WHERE phone = ?', [phone]);
+    const [[user]] = await pool.query('SELECT phone, name, email, balance FROM users WHERE phone = ?', [phone]);
 
-    if (rows.length === 0) {
-      return res.status(404).json({ message: 'Pengguna tidak ditemukan.' });
-    }
+    const [[{ total_income = 0 }]] = await pool.query('SELECT SUM(amount) AS total_income FROM income WHERE phone = ?', [phone]);
 
-    // Mendapatkan total income
-    const [incomeResult] = await pool.query('SELECT SUM(amount) as total_income FROM income WHERE phone = ?', [phone]);
-
-    // Mendapatkan total expense
-    const [expenseResult] = await pool.query('SELECT SUM(amount) as total_expense FROM expense WHERE phone = ?', [phone]);
-
-    const totalIncome = incomeResult[0].total_income || 0;
-    const totalExpense = expenseResult[0].total_expense || 0;
+    const [[{ total_expense = 0 }]] = await pool.query('SELECT SUM(amount) AS total_expense FROM expense WHERE phone = ?', [phone]);
 
     res.json({
-      phone: rows[0].phone,
-      name: rows[0].name,
-      email: rows[0].email,
-      balance: parseFloat(rows[0].balance),
-      total_income: parseFloat(totalIncome),
-      total_expense: parseFloat(totalExpense),
+      ...user,
+      balance: parseFloat(user.balance),
+      total_income: parseFloat(total_income),
+      total_expense: parseFloat(total_expense),
     });
   } catch (error) {
     console.error('Profile error:', error);
@@ -634,118 +624,51 @@ app.get('/api/profile', authenticateToken, async (req, res) => {
   }
 });
 
-// Update profile endpoint
+//## API UNTUK UPDATE PROFILE
 app.patch('/api/profile', authenticateToken, async (req, res) => {
   try {
-    const phone = req.user.phone;
     const { name, email } = req.body;
+    const phone = req.user.phone;
 
-    // Validate that at least one field is provided
-    if (!name && !email) {
+    if (!name || !email) {
       return res.status(400).json({
-        message: 'Setidaknya satu field (name atau email) harus diisi untuk update',
+        message: 'Field name dan email harus diisi untuk update',
       });
     }
+    await pool.query('UPDATE users SET name = ?, email = ? WHERE phone = ?', [name, email, phone]);
 
-    // Check if user exists
-    const [userCheck] = await pool.query('SELECT * FROM users WHERE phone = ?', [phone]);
-
-    if (userCheck.length === 0) {
-      return res.status(404).json({ message: 'Pengguna tidak ditemukan.' });
-    }
-
-    // Build update query dynamically based on provided fields
-    let updateQuery = 'UPDATE users SET ';
-    const updateValues = [];
-
-    if (name) {
-      updateQuery += 'name = ?';
-      updateValues.push(name);
-    }
-
-    if (email) {
-      if (name) updateQuery += ', '; // Add comma if name was added
-      updateQuery += 'email = ?';
-      updateValues.push(email);
-    }
-
-    updateQuery += ' WHERE phone = ?';
-    updateValues.push(phone);
-
-    // Execute update query
-    await pool.query(updateQuery, updateValues);
-
-    // Get updated user data
-    const [updatedUser] = await pool.query('SELECT phone, name, email, balance FROM users WHERE phone = ?', [phone]);
-
-    res.json({
-      message: 'Profil berhasil diperbarui',
-      data: {
-        name: updatedUser[0].name,
-        email: updatedUser[0].email,
-      },
-    });
+    res.json({ message: 'Profil berhasil diperbarui' });
   } catch (error) {
     console.error('Update profile error:', error);
     res.status(500).json({ message: 'Server error' });
   }
 });
 
-// Change password endpoint
+//## API UNTUK GANTI PASSWORD
 app.patch('/api/change-password', authenticateToken, async (req, res) => {
   try {
-    const phone = req.user.phone;
     const { oldPassword, newPassword } = req.body;
+    const phone = req.user.phone;
 
-    // Validate request
     if (!oldPassword || !newPassword) {
       return res.status(400).json({
         message: 'Password lama dan password baru harus diisi',
       });
     }
 
-    // Check if new password meets requirements
-    if (newPassword.length < 6) {
-      return res.status(400).json({
-        message: 'Password baru harus minimal 6 karakter',
-      });
-    }
-
-    // Get user data to verify old password
-    const [users] = await pool.query('SELECT * FROM users WHERE phone = ?', [phone]);
-
-    if (users.length === 0) {
-      return res.status(404).json({ message: 'Pengguna tidak ditemukan' });
-    }
+    const [users] = await pool.query('SELECT password FROM users WHERE phone = ?', [phone]);
 
     const user = users[0];
-
-    // Verify old password
-    const isHashed = user.password.startsWith('$2b$') || user.password.startsWith('$2a$');
-    let isOldPasswordValid = false;
-
-    if (isHashed) {
-      // Compare with hashed password
-      isOldPasswordValid = await bcrypt.compare(oldPassword, user.password);
-    } else {
-      // Direct comparison for legacy passwords
-      isOldPasswordValid = user.password === oldPassword;
-    }
-
-    if (!isOldPasswordValid) {
+    const isValid = await bcrypt.compare(oldPassword, user.password);
+    if (!isValid) {
       return res.status(401).json({ message: 'Password lama tidak valid' });
     }
 
-    // Hash new password
-    const saltRounds = 10;
-    const hashedNewPassword = await bcrypt.hash(newPassword, saltRounds);
-
-    // Update password
-    await pool.query('UPDATE users SET password = ? WHERE phone = ?', [hashedNewPassword, phone]);
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    await pool.query('UPDATE users SET password = ? WHERE phone = ?', [hashedPassword, phone]);
 
     res.json({ message: 'Password berhasil diubah' });
   } catch (error) {
-    console.error('Change password error:', error);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -753,24 +676,48 @@ app.patch('/api/change-password', authenticateToken, async (req, res) => {
 // Savings endpoints
 app.post('/api/savings', authenticateToken, async (req, res) => {
   try {
-    const phone = req.user.phone;
-    const { nama, deskripsi, target, terkumpul = 0 } = req.body;
+    const { nama, deskripsi, target, terkumpul = 0, deductFromBalance } = req.body;
+    const userPhone = req.user.phone;
 
     if (!nama || !target) {
       return res.status(400).json({
-        message: 'Kolom nama dan target harus diisi',
+        message: 'Name and savings target must be filled in',
       });
     }
 
+    // If collected > 0 and deductFromBalance is true, deduct the user's balance
+    if (terkumpul > 0 && deductFromBalance) {
+      // Check balance
+      const [userRows] = await pool.query('SELECT balance FROM users WHERE phone = ?', [userPhone]);
+
+      if (userRows.length === 0) {
+        return res.status(404).json({
+          message: 'User not found',
+        });
+      }
+
+      const userBalance = userRows[0].balance;
+
+      // Check balance
+      if (userBalance < terkumpul) {
+        return res.status(400).json({
+          message: 'Insufficient balance to create a savings account with that initial amount',
+        });
+      }
+
+      // Deduct balance
+      await pool.query('UPDATE users SET balance = balance - ? WHERE phone = ?', [terkumpul, userPhone]);
+    }
+
     // Insert the new savings record
-    const [result] = await pool.query('INSERT INTO savings (phone, nama, deskripsi, target, terkumpul) VALUES (?, ?, ?, ?, ?)', [phone, nama, deskripsi, target, terkumpul]);
+    const [result] = await pool.query('INSERT INTO savings (phone, nama, deskripsi, target, terkumpul) VALUES (?, ?, ?, ?, ?)', [userPhone, nama, deskripsi, target, terkumpul]);
 
     // Get the inserted savings record to return in response
     const [newSavings] = await pool.query('SELECT id, nama, deskripsi, target, terkumpul FROM savings WHERE id = ?', [result.insertId]);
 
     res.status(201).json({
       success: true,
-      message: 'Tabungan berhasil ditambahkan',
+      message: 'Savings successfully added',
       data: {
         id: newSavings[0].id,
         nama: newSavings[0].nama,
@@ -783,7 +730,7 @@ app.post('/api/savings', authenticateToken, async (req, res) => {
     console.error('Create savings error:', error);
     res.status(500).json({
       success: false,
-      message: 'Gagal menambahkan tabungan',
+      message: 'Failed to add savings',
     });
   }
 });
@@ -796,7 +743,7 @@ app.get('/api/savings/summary', authenticateToken, async (req, res) => {
     const [users] = await pool.query('SELECT * FROM users WHERE phone = ?', [phone]);
 
     if (users.length === 0) {
-      return res.status(404).json({ message: 'Pengguna tidak ditemukan' });
+      return res.status(404).json({ message: 'User not found' });
     }
 
     // Get savings summary
@@ -812,7 +759,7 @@ app.get('/api/savings/summary', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('Get savings summary error:', error);
-    res.status(500).json({ message: 'Gagal mengambil data tabungan' });
+    res.status(500).json({ message: 'Failed to retrieve savings data' });
   }
 });
 
@@ -869,7 +816,7 @@ app.get('/api/savings', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('Get savings error:', error);
-    res.status(500).json({ message: 'Gagal mengambil data tabungan' });
+    res.status(500).json({ message: 'Failed to retrieve savings data' });
   }
 });
 
@@ -884,7 +831,7 @@ app.patch('/api/savings/:id', authenticateToken, async (req, res) => {
     const [savingsCheck] = await pool.query('SELECT * FROM savings WHERE id = ? AND phone = ?', [savingsId, phone]);
 
     if (savingsCheck.length === 0) {
-      return res.status(404).json({ message: 'Tabungan tidak ditemukan atau bukan milik Anda' });
+      return res.status(404).json({ message: 'Savings not found' });
     }
 
     // Update savings
@@ -895,51 +842,70 @@ app.patch('/api/savings/:id', authenticateToken, async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Tabungan berhasil diperbarui',
+      message: 'Savings successfully updated',
       data: updatedSavings[0],
     });
   } catch (error) {
     console.error('Update savings error:', error);
-    res.status(500).json({ message: 'Gagal memperbarui tabungan' });
+    res.status(500).json({ message: 'Failed to update savings' });
   }
 });
 
 // Add amount to savings
 app.patch('/api/savings/:id/add', authenticateToken, async (req, res) => {
   try {
-    const phone = req.user.phone;
+    const userPhone = req.user.phone;
     const savingId = req.params.id;
-    const { amount } = req.body;
+    const { amount, deductFromBalance = false } = req.body;
 
     if (!amount || isNaN(amount) || amount <= 0) {
       return res.status(400).json({
         success: false,
-        message: 'Jumlah yang ditambahkan harus berupa angka positif',
+        message: 'The amount added must be a positive number',
       });
     }
 
-    // Verifikasi bahwa tabungan milik pengguna yang terautentikasi
-    const [savingCheck] = await pool.query('SELECT * FROM savings WHERE id = ? AND phone = ?', [savingId, phone]);
+    // Verify savings
+    const [savingCheck] = await pool.query('SELECT * FROM savings WHERE id = ? AND phone = ?', [savingId, userPhone]);
 
     if (savingCheck.length === 0) {
       return res.status(404).json({
         success: false,
-        message: 'Tabungan tidak ditemukan atau bukan milik Anda',
+        message: 'Savings not found',
       });
+    }
+
+    if (deductFromBalance) {
+      // Get balance
+      const [users] = await pool.query('SELECT balance FROM users WHERE phone = ?', [userPhone]);
+
+      if (users.length === 0) {
+        return res.status(404).json({ message: 'Pengguna tidak ditemukan' });
+      }
+
+      const userBalance = users[0].balance;
+
+      // Check balance
+      if (userBalance < amount) {
+        return res.status(400).json({ message: 'Saldo tidak mencukupi' });
+      }
+
+      // Deduct balance
+      await pool.query('UPDATE users SET balance = balance - ? WHERE phone = ?', [amount, userPhone]);
     }
 
     const saving = savingCheck[0];
     const newAmount = parseInt(saving.terkumpul) + parseInt(amount);
 
-    // Update jumlah terkumpul
+    // Update collected amount
     await pool.query('UPDATE savings SET terkumpul = ? WHERE id = ?', [newAmount, savingId]);
 
-    // Ambil data tabungan yang sudah diupdate
+    // Get updated savings
     const [updatedSaving] = await pool.query('SELECT id, nama, deskripsi, target, terkumpul FROM savings WHERE id = ?', [savingId]);
 
     res.json({
       success: true,
-      message: 'Dana berhasil ditambahkan ke tabungan',
+      message: 'Funds are successfully added to savings',
       data: {
         id: updatedSaving[0].id,
         nama: updatedSaving[0].nama,
@@ -947,12 +913,13 @@ app.patch('/api/savings/:id/add', authenticateToken, async (req, res) => {
         target: updatedSaving[0].target.toString(),
         terkumpul: updatedSaving[0].terkumpul.toString(),
       },
+      balanceDeducted: deductFromBalance,
     });
   } catch (error) {
     console.error('Add to savings error:', error);
     res.status(500).json({
       success: false,
-      message: 'Gagal menambahkan dana ke tabungan',
+      message: 'Failed to add funds to savings',
     });
   }
 });
@@ -960,41 +927,147 @@ app.patch('/api/savings/:id/add', authenticateToken, async (req, res) => {
 // Delete savings record
 app.delete('/api/savings/:id', authenticateToken, async (req, res) => {
   try {
-    const phone = req.user.phone;
-    const savingsId = req.params.id;
+    const savingId = req.params.id;
+    const userPhone = req.user.phone;
 
-    // Check if the savings record exists and belongs to the user
-    const [savings] = await pool.query('SELECT * FROM savings WHERE id = ? AND phone = ?', [savingsId, phone]);
+    // Get data before deleting
+    const [savingRows] = await pool.query('SELECT * FROM savings WHERE id = ? AND phone = ?', [savingId, userPhone]);
 
-    if (savings.length === 0) {
+    if (savingRows.length === 0) {
       return res.status(404).json({
-        success: false,
-        message: 'Data tabungan tidak ditemukan atau bukan milik Anda',
+        message: 'Tabungan tidak ditemukan atau bukan milik Anda',
       });
     }
 
-    // Save the data before deletion for response
-    const deletedSavings = {
-      id: savings[0].id,
-      nama: savings[0].nama,
-      deskripsi: savings[0].deskripsi || '',
-      target: savings[0].target.toString(),
-      terkumpul: savings[0].terkumpul.toString(),
-    };
+    const saving = savingRows[0];
+    const amountToAdd = saving.terkumpul;
 
-    // Delete the savings record
-    await pool.query('DELETE FROM savings WHERE id = ? AND phone = ?', [savingsId, phone]);
+    // Start transaction
+    const connection = await pool.getConnection();
+    await connection.beginTransaction();
 
-    res.json({
+    try {
+      // Update balance
+      await connection.query('UPDATE users SET balance = balance + ? WHERE phone = ?', [amountToAdd, userPhone]);
+
+      // Delete savings
+      await connection.query('DELETE FROM savings WHERE id = ? AND phone = ?', [savingId, userPhone]);
+
+      // Add as income
+      if (amountToAdd > 0) {
+        const today = new Date().toISOString().split('T')[0]; // Format YYYY-MM-DD
+        await connection.query('INSERT INTO income (amount, phone, sender_phone, type, date, message) VALUES (?, ?, ?, ?, ?, ?)', [amountToAdd, userPhone, userPhone, 'normal', today, `Withdraw from: ${saving.nama}`]);
+      }
+
+      // Commit transaction
+      await connection.commit();
+
+      res.status(200).json({
+        message: 'Savings successfully deleted and balance added',
+        amountAdded: amountToAdd,
+      });
+    } catch (error) {
+      // Rollback if error
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  } catch (error) {
+    console.error('Error deleting saving:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Withdraw saving (move to balance and delete saving)
+app.post('/api/savings/:id/withdraw', authenticateToken, async (req, res) => {
+  try {
+    const savingId = req.params.id;
+    const userPhone = req.user.phone;
+
+    // Get saving details first
+    const [savingRows] = await pool.query('SELECT * FROM savings WHERE id = ? AND phone = ?', [savingId, userPhone]);
+
+    if (savingRows.length === 0) {
+      return res.status(404).json({
+        message: 'Savings not found',
+      });
+    }
+
+    const saving = savingRows[0];
+    const amount = saving.terkumpul;
+
+    // Begin transaction
+    const connection = await pool.getConnection();
+    await connection.beginTransaction();
+
+    try {
+      // 1. Add to user balance
+      await connection.query('UPDATE users SET balance = balance + ? WHERE phone = ?', [amount, userPhone]);
+
+      // 2. Create income record
+      const today = new Date().toISOString().split('T')[0]; // Format: YYYY-MM-DD
+      await connection.query('INSERT INTO income (amount, phone, sender_phone, type, date, message) VALUES (?, ?, ?, ?, ?, ?)', [amount, userPhone, userPhone, 'normal', today, `Withdraw from: ${saving.nama}`]);
+
+      // 3. Delete the saving
+      await connection.query('DELETE FROM savings WHERE id = ?', [savingId]);
+
+      // Commit transaction
+      await connection.commit();
+
+      res.status(200).json({
+        message: 'Savings successfully withdrawn and deleted',
+        amount: amount,
+      });
+    } catch (error) {
+      // Rollback if error
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  } catch (error) {
+    console.error('Withdraw savings error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Endpoint for updating savings target
+app.patch('/api/savings/:id/update-target', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { target } = req.body;
+    const phone = req.user.phone;
+
+    if (!id || !target) {
+      return res.status(400).json({
+        success: false,
+        message: 'Savings ID and new target required',
+      });
+    }
+
+    // Verify savings
+    const [savingExists] = await pool.query('SELECT * FROM savings WHERE id = ? AND phone = ?', [id, phone]);
+
+    if (savingExists.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Savings not found',
+      });
+    }
+
+    // Update target
+    await pool.query('UPDATE savings SET target = ? WHERE id = ?', [target, id]);
+
+    res.status(200).json({
       success: true,
-      message: 'Tabungan berhasil dihapus',
-      data: deletedSavings,
+      message: 'Savings target updated successfully',
     });
   } catch (error) {
-    console.error('Delete savings error:', error);
+    console.error('Update savings target error:', error);
     res.status(500).json({
       success: false,
-      message: 'Gagal menghapus tabungan',
+      message: 'Server error',
     });
   }
 });
@@ -1183,7 +1256,7 @@ app.get('/api/transactions', authenticateToken, async (req, res) => {
   }
 });
 
-// Income record endpoint
+//## GET INCOME RECORDS
 app.get('/api/income-record', authenticateToken, async (req, res) => {
   try {
     const phone = req.user.phone;
@@ -1213,16 +1286,17 @@ app.get('/api/income-record', authenticateToken, async (req, res) => {
       type: record.type || 'normal',
       sender_phone: record.sender_phone ? record.sender_phone.toString() : '',
       sender_name: record.sender_name || 'Unknown',
+      type: record.type || 'normal',
+      date: record.date.toLocaleDateString('en-CA'),
       message: record.message || '',
     }));
 
     res.json({
       success: true,
       message: 'Data pemasukan berhasil diambil',
-      records: formattedRecords,
+      records: formattedRecords ?? [],
     });
   } catch (error) {
-    console.error('Get income records error:', error);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -1691,99 +1765,70 @@ app.post('/api/transfer', authenticateToken, async (req, res) => {
 // Topup endpoint
 app.post('/api/topup', authenticateToken, async (req, res) => {
   try {
-    const phone = req.user.phone;
+    const userPhone = req.user.phone;
     const { amount } = req.body;
 
-    // Validate required fields
     if (!amount) {
-      return res.status(400).json({
-        success: false,
-        message: 'Jumlah topup harus diisi',
-      });
+      return res.status(400).json({ message: 'Jumlah top up diperlukan' });
     }
 
-    // Validate amount is a positive number
-    const topupAmount = parseInt(amount);
-    if (isNaN(topupAmount) || topupAmount <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Jumlah topup harus berupa angka positif',
-      });
+    // Validasi format jumlah
+    const amountValue = parseInt(amount);
+    if (isNaN(amountValue) || amountValue <= 0) {
+      return res.status(400).json({ message: 'Jumlah top up tidak valid' });
     }
 
-    // Check if user exists
-    const [users] = await pool.query('SELECT * FROM users WHERE phone = ?', [phone]);
-
-    if (users.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Pengguna tidak ditemukan',
-      });
-    }
-
-    const user = users[0];
-    const currentBalance = parseInt(user.balance);
-    const newBalance = currentBalance + topupAmount;
-
-    // Begin transaction
+    // Mulai transaksi database
     const connection = await pool.getConnection();
-    await connection.beginTransaction();
-
     try {
-      // Update user's balance
-      await connection.query('UPDATE users SET balance = ? WHERE phone = ?', [newBalance, phone]);
+      await connection.beginTransaction();
 
-      // Create income record for topup
-      const currentDate = new Date().toISOString().split('T')[0]; // Format: YYYY-MM-DD
-      await connection.query('INSERT INTO income (amount, phone, sender_phone, type, date, message) VALUES (?, ?, ?, ?, ?, ?)', [topupAmount, phone, phone, 'topup', currentDate, 'Top up saldo']);
+      // Update saldo pengguna
+      await connection.query('UPDATE users SET balance = balance + ? WHERE phone = ?', [amountValue, userPhone]);
 
-      // Commit transaction
+      // Catat transaksi top up di tabel income
+      const today = new Date().toISOString().split('T')[0]; // Format YYYY-MM-DD
+      await connection.query('INSERT INTO income (amount, phone, sender_phone, type, date) VALUES (?, ?, ?, "topup", ?)', [amountValue, userPhone, userPhone, today]);
+
+      // Commit transaksi
       await connection.commit();
 
-      res.json({
-        success: true,
+      // Ambil saldo terbaru
+      const [userRows] = await connection.query('SELECT balance FROM users WHERE phone = ?', [userPhone]);
+      const newBalance = userRows[0].balance;
+
+      res.status(200).json({
         message: 'Top up berhasil',
-        data: {
-          topupAmount: topupAmount.toString(),
-          newBalance: newBalance.toString(),
-          date: currentDate,
-        },
+        amount: amountValue,
+        newBalance: newBalance,
       });
     } catch (error) {
-      // Rollback in case of error
+      // Rollback jika terjadi kesalahan
       await connection.rollback();
       throw error;
     } finally {
       connection.release();
     }
   } catch (error) {
-    console.error('Topup error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Gagal melakukan top up',
-    });
+    console.error('Top up error:', error);
+    res.status(500).json({ message: 'Server error' });
   }
 });
 
-// Recent transactions endpoint
+//## RECENT TRANSACTIONS
 app.get('/api/recent-transactions', authenticateToken, async (req, res) => {
   try {
     const phone = req.user.phone;
 
-    // Get recent income transactions with sender names
     const [incomeRecords] = await pool.query(
       `
       SELECT 
         i.id,
         i.amount, 
-        i.sender_phone, 
-        u.name AS sender_name, 
         i.type, 
         i.date, 
-        i.message,
         'income' AS transaction_type
       FROM income i
-      LEFT JOIN users u ON i.sender_phone = u.phone
       WHERE i.phone = ?
       ORDER BY i.date DESC, i.id DESC
       LIMIT 5
@@ -1791,20 +1836,15 @@ app.get('/api/recent-transactions', authenticateToken, async (req, res) => {
       [phone]
     );
 
-    // Get recent expense transactions with receiver names
     const [expenseRecords] = await pool.query(
       `
       SELECT 
         e.id,
         e.amount, 
-        e.receiver_phone, 
-        u.name AS receiver_name, 
         e.type, 
         e.date, 
-        e.message,
         'expense' AS transaction_type
       FROM expense e
-      LEFT JOIN users u ON e.receiver_phone = u.phone
       WHERE e.phone = ?
       ORDER BY e.date DESC, e.id DESC
       LIMIT 5
@@ -1812,48 +1852,92 @@ app.get('/api/recent-transactions', authenticateToken, async (req, res) => {
       [phone]
     );
 
-    // Combine and format the response data
-    const formattedIncome = incomeRecords.map((record) => ({
-      id: record.id,
+    const formatRecord = (record) => ({
       amount: record.amount.toString(),
-      otherParty: record.sender_name || 'Unknown',
-      otherPartyPhone: record.sender_phone.toString(),
       type: record.type,
-      date: formatDate(record.date),
-      message: record.message || '',
+      date: record.date.toLocaleDateString('en-CA'),
       transactionType: record.transaction_type,
-    }));
+    });
 
-    const formattedExpense = expenseRecords.map((record) => ({
-      id: record.id,
-      amount: record.amount.toString(),
-      otherParty: record.receiver_name || 'Unknown',
-      otherPartyPhone: record.receiver_phone.toString(),
-      type: record.type,
-      date: formatDate(record.date),
-      message: record.message || '',
-      transactionType: record.transaction_type,
-    }));
-
-    // Combine both types, sort by date (most recent first), and limit to 5
-    const allTransactions = [...formattedIncome, ...formattedExpense]
+    const allTransactions = [...incomeRecords, ...expenseRecords]
       .sort((a, b) => {
-        // Sort by date first (newest first)
         const dateCompare = new Date(b.date) - new Date(a.date);
-        // If dates are the same, sort by ID (newest first, assuming higher ID = newer)
         return dateCompare !== 0 ? dateCompare : b.id - a.id;
       })
-      .slice(0, 5);
+      .slice(0, 5)
+      .map(formatRecord);
 
     res.json({
       success: true,
-      data: allTransactions,
+      records: allTransactions,
     });
   } catch (error) {
     console.error('Recent transactions error:', error);
     res.status(500).json({
       success: false,
       message: 'Gagal mengambil data transaksi terbaru',
+    });
+  }
+});
+
+// ## HISTORY
+app.get('/api/transaction-history', authenticateToken, async (req, res) => {
+  try {
+    const phone = req.user.phone;
+
+    const [incomeRecords] = await pool.query(
+      `
+      SELECT 
+        i.id,
+        i.amount, 
+        i.type, 
+        i.date, 
+        'income' AS transaction_type
+      FROM income i
+      WHERE i.phone = ?
+      ORDER BY i.date DESC, i.id DESC
+    `,
+      [phone]
+    );
+
+    const [expenseRecords] = await pool.query(
+      `
+      SELECT 
+        e.id,
+        e.amount, 
+        e.type, 
+        e.date, 
+        'expense' AS transaction_type
+      FROM expense e
+      WHERE e.phone = ?
+      ORDER BY e.date DESC, e.id DESC
+    `,
+      [phone]
+    );
+
+    const formatRecord = (record) => ({
+      amount: record.amount.toString(),
+      type: record.type,
+      date: record.date.toLocaleDateString('en-CA'),
+      transactionType: record.transaction_type,
+    });
+
+    const allTransactions = [...incomeRecords, ...expenseRecords]
+      .sort((a, b) => {
+        const dateCompare = new Date(b.date) - new Date(a.date);
+        return dateCompare !== 0 ? dateCompare : b.id - a.id;
+      })
+      .map(formatRecord);
+
+    res.json({
+      success: true,
+      records: allTransactions,
+    });
+  } catch (error) {
+    console.error('Transaction histories error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Gagal mengambil data histori transaksi',
     });
   }
 });
