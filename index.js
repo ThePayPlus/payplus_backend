@@ -5,9 +5,13 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
+const WebSocket = require('ws');
+const http = require('http');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ server });
 
 // Middleware
 app.use(express.json());
@@ -95,6 +99,37 @@ const authenticateToken = (req, res, next) => {
     next();
   });
 };
+
+// Tangani koneksi WebSocket
+wss.on('connection', (ws) => {
+  console.log('A user connected');
+
+  // Mendengarkan pesan dari client
+  ws.on('message', (message) => {
+    console.log('received: %s', message);
+
+    // Kirim pesan kembali ke semua client yang terhubung
+    wss.clients.forEach((client) => {
+      if (client !== ws && client.readyState === WebSocket.OPEN) {
+        client.send(message);
+      }
+    });
+  });
+
+  ws.on('close', () => {
+    console.log('A user disconnected');
+  });
+});
+
+// Rute API dan lainnya tetap bisa berjalan
+app.get('/', (req, res) => {
+  res.send('WebSocket server is running!');
+});
+
+// Mulai server di port 3000
+server.listen(3000, '0.0.0.0', () => {
+  console.log('Server is running on http://10.0.2.2:3000');
+});
 
 // Routes
 
@@ -516,6 +551,52 @@ app.delete('/api/friends/:friendPhone', authenticateToken, async (req, res) => {
       success: false,
       message: 'Server error',
     });
+  }
+});
+
+// Endpoint untuk mengirim pesan
+app.post('/api/messages', authenticateToken, async (req, res) => {
+  try {
+    const senderPhone = req.user.phone; // Nomor telepon pengirim dari token
+    const { receiverPhone, message } = req.body;
+
+    // Validasi input
+    if (!receiverPhone || !message) {
+      return res.status(400).json({ message: 'Receiver phone and message are required' });
+    }
+
+    // Simpan pesan ke database
+    await pool.query('INSERT INTO messages (sender_phone, receiver_phone, message) VALUES (?, ?, ?)', [senderPhone, receiverPhone, message]);
+
+    res.status(201).json({ message: 'Pesan berhasil dikirim' });
+  } catch (error) {
+    console.error('Send message error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Endpoint untuk mengambil pesan antara dua teman
+app.get('/api/messages/:friendPhone', authenticateToken, async (req, res) => {
+  try {
+    const userPhone = req.user.phone;
+    const { friendPhone } = req.params;
+
+    // Ambil pesan antara user dan teman berdasarkan nomor telepon
+    const [messages] = await pool.query(
+      `SELECT * FROM messages
+       WHERE (sender_phone = ? AND receiver_phone = ?) 
+          OR (sender_phone = ? AND receiver_phone = ?)
+       ORDER BY sent_at ASC`,
+      [userPhone, friendPhone, friendPhone, userPhone]
+    );
+
+    res.status(200).json({
+      success: true,
+      messages: messages,
+    });
+  } catch (error) {
+    console.error('Get messages error:', error);
+    res.status(500).json({ message: 'Server error' });
   }
 });
 

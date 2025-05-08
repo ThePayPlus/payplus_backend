@@ -121,6 +121,7 @@ async function createTables(connection) {
         user_phone bigint(50) NOT NULL,
         friend_phone bigint(50) NOT NULL,
         status enum('pending','accepted','rejected') NOT NULL DEFAULT 'pending',
+        friend_nickname VARCHAR(255) DEFAULT NULL, 
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         PRIMARY KEY (id),
@@ -132,6 +133,21 @@ async function createTables(connection) {
       )
     `);
 
+    // messages table
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS messages (
+        id int(11) NOT NULL AUTO_INCREMENT,
+        sender_phone bigint(50) NOT NULL,
+        receiver_phone bigint(50) NOT NULL,
+        message text NOT NULL,
+        sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, 
+        PRIMARY KEY (id),
+        KEY fk_sender (sender_phone),
+        KEY fk_receiver (receiver_phone),
+        CONSTRAINT fk_sender FOREIGN KEY (sender_phone) REFERENCES users (phone) ON DELETE CASCADE ON UPDATE CASCADE,
+        CONSTRAINT fk_receiver FOREIGN KEY (receiver_phone) REFERENCES users (phone) ON DELETE CASCADE ON UPDATE CASCADE
+      )
+    `);
     // Insert sample data
     await insertSampleData(connection);
 
