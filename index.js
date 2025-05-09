@@ -1297,7 +1297,7 @@ app.get('/api/income-record', authenticateToken, async (req, res) => {
       FROM income i
       LEFT JOIN users u ON i.sender_phone = u.phone
       WHERE i.phone = ?
-      ORDER BY i.date DESC`,
+      ORDER BY i.date DESC, i.id DESC`,
       [phone]
     );
 
@@ -1452,7 +1452,7 @@ app.get('/api/expense-record', authenticateToken, async (req, res) => {
       FROM expense e
       LEFT JOIN users u ON e.receiver_phone = u.phone
       WHERE e.phone = ?
-      ORDER BY e.date DESC`,
+      ORDER BY e.date DESC, e.id DESC`,
       [phone]
     );
 
