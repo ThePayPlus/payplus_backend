@@ -7,11 +7,15 @@ const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const WebSocket = require('ws');
 const http = require('http');
+const { OpenAI } = require('openai');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
+const openai = new OpenAI({
+  apiKey: process.env.GPT_API_KEY,
+});
 
 // Middleware
 app.use(express.json());
@@ -127,11 +131,84 @@ app.get('/', (req, res) => {
 });
 
 // Mulai server di port 3000
-server.listen(3000, '0.0.0.0', () => {
+server.listen(3000, () => {
   console.log('Server is running on http://10.0.2.2:3000');
 });
 
 // Routes
+
+// Di endpoint chatbot
+app.post('/api/chatbot', authenticateToken, async (req, res) => {
+  try {
+    const { message } = req.body;
+    const userPhone = req.user.phone;
+
+    if (!message) {
+      return res.status(400).json({
+        success: false,
+        message: 'Pesan diperlukan',
+      });
+    }
+
+    // Dapatkan data pengguna untuk konteks
+    const [[user]] = await pool.query('SELECT name, balance FROM users WHERE phone = ?', [userPhone]);
+
+    // Coba gunakan OpenAI API
+    try {
+      // Panggil OpenAI API
+      const completion = await openai.chat.completions.create({
+        model: 'gpt-3.5-turbo',
+        messages: [
+          { role: 'system', content: 'Kamu adalah asisten keuangan PayPlus yang membantu pengguna dengan pertanyaan tentang keuangan, fitur aplikasi, dan tips pengelolaan uang.' },
+          { role: 'user', content: `Pengguna: ${user.name}\nSaldo: Rp${user.balance}\nPertanyaan: ${message}` },
+        ],
+        max_tokens: 500,
+      });
+
+      // Simpan percakapan ke database
+      await pool.query('INSERT INTO chatbot_history (phone, user_message, bot_response) VALUES (?, ?, ?)', [userPhone, message, completion.choices[0].message.content]);
+
+      return res.status(200).json({
+        success: true,
+        response: completion.choices[0].message.content,
+      });
+    } catch (apiError) {
+      console.error('OpenAI API error:', apiError);
+
+      // Gunakan respons fallback jika API error
+      const fallbackResponse = getFallbackResponse(message, user.name);
+
+      // Simpan percakapan dengan respons fallback
+      await pool.query('INSERT INTO chatbot_history (phone, user_message, bot_response) VALUES (?, ?, ?)', [userPhone, message, fallbackResponse]);
+
+      return res.status(200).json({
+        success: true,
+        response: fallbackResponse,
+      });
+    }
+  } catch (error) {
+    console.error('Chatbot error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+    });
+  }
+});
+
+// Fungsi untuk mendapatkan respons fallback
+function getFallbackResponse(message, userName) {
+  const lowerMessage = message.toLowerCase();
+
+  if (lowerMessage.includes('saldo') || lowerMessage.includes('uang')) {
+    return `Halo ${userName}, untuk melihat saldo Anda, silakan cek di halaman utama aplikasi PayPlus. Jika ada pertanyaan lain tentang keuangan Anda, silakan hubungi customer service kami.`;
+  } else if (lowerMessage.includes('transfer') || lowerMessage.includes('kirim uang')) {
+    return `Untuk melakukan transfer, Anda dapat menggunakan fitur Transfer di menu utama aplikasi PayPlus. Pilih tujuan transfer, masukkan nominal, dan ikuti petunjuk selanjutnya.`;
+  } else if (lowerMessage.includes('investasi') || lowerMessage.includes('tabung')) {
+    return `PayPlus menawarkan berbagai produk investasi yang dapat membantu Anda mengembangkan dana. Silakan cek menu Investasi di aplikasi untuk informasi lebih lanjut.`;
+  } else {
+    return `Terima kasih atas pertanyaan Anda. Saat ini layanan chatbot kami sedang dalam pemeliharaan. Silakan coba lagi nanti atau hubungi customer service kami untuk bantuan lebih lanjut.`;
+  }
+}
 
 // Auth routes
 // Login endpoint
@@ -255,6 +332,10 @@ app.post('/api/friends', authenticateToken, async (req, res) => {
 
     // Cek apakah nomor telepon teman ada di database
     const [friendExists] = await pool.query('SELECT * FROM users WHERE phone = ?', [friendPhone]);
+
+    if (userPhone === friendPhone) {
+      return res.status(400).json({ message: 'Anda tidak dapat menambahkan diri sendiri sebagai teman' });
+    }
 
     if (friendExists.length === 0) {
       return res.status(404).json({ message: 'Pengguna dengan nomor telepon tersebut tidak ditemukan' });
@@ -445,64 +526,6 @@ app.patch('/api/friends/respond/:requestId', authenticateToken, async (req, res)
     });
   } catch (error) {
     console.error('Respond to friend request error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error',
-    });
-  }
-});
-
-// Endpoint untuk mengedit data teman
-app.put('/api/friends/edit/:friendPhone', authenticateToken, async (req, res) => {
-  try {
-    const userPhone = req.user.phone;
-    const { friendPhone } = req.params;
-    const { nickname } = req.body;
-
-    if (!friendPhone) {
-      return res.status(400).json({
-        success: false,
-        message: 'Nomor telepon teman diperlukan',
-      });
-    }
-
-    if (!nickname) {
-      return res.status(400).json({
-        success: false,
-        message: 'Nickname diperlukan untuk mengedit teman',
-      });
-    }
-
-    // Cek apakah pertemanan ada dan sudah diterima
-    const [existingFriendship] = await pool.query(
-      `SELECT * FROM friends 
-       WHERE ((user_phone = ? AND friend_phone = ?) OR (user_phone = ? AND friend_phone = ?))
-       AND status = 'accepted'`,
-      [userPhone, friendPhone, friendPhone, userPhone]
-    );
-
-    if (existingFriendship.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Pertemanan tidak ditemukan atau belum diterima',
-      });
-    }
-
-    // Perbarui data teman (tambahkan kolom nickname di tabel friends jika belum ada)
-    const friendship = existingFriendship[0];
-
-    if (friendship.user_phone === userPhone) {
-      await pool.query('UPDATE friends SET friend_nickname = ?, updated_at = NOW() WHERE id = ?', [nickname, friendship.id]);
-    } else {
-      await pool.query('UPDATE friends SET user_nickname = ?, updated_at = NOW() WHERE id = ?', [nickname, friendship.id]);
-    }
-
-    res.status(200).json({
-      success: true,
-      message: 'Data teman berhasil diperbarui',
-    });
-  } catch (error) {
-    console.error('Edit friend error:', error);
     res.status(500).json({
       success: false,
       message: 'Server error',
@@ -1603,20 +1626,17 @@ app.get('/api/users/search', authenticateToken, async (req, res) => {
     const { phone } = req.query;
 
     if (!phone) {
-      return res.status(400).json({ 
-        message: 'Nomor telepon diperlukan untuk pencarian' 
+      return res.status(400).json({
+        message: 'Nomor telepon diperlukan untuk pencarian',
       });
     }
 
     // Cari pengguna berdasarkan nomor telepon
-    const [rows] = await pool.query(
-      'SELECT phone, name, email FROM users WHERE phone = ?',
-      [phone]
-    );
+    const [rows] = await pool.query('SELECT phone, name, email FROM users WHERE phone = ?', [phone]);
 
     if (rows.length === 0) {
-      return res.status(404).json({ 
-        message: 'Pengguna tidak ditemukan' 
+      return res.status(404).json({
+        message: 'Pengguna tidak ditemukan',
       });
     }
 

@@ -148,6 +148,20 @@ async function createTables(connection) {
         CONSTRAINT fk_receiver FOREIGN KEY (receiver_phone) REFERENCES users (phone) ON DELETE CASCADE ON UPDATE CASCADE
       )
     `);
+
+    // Tambahkan tabel chatbot_history
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS chatbot_history (
+        id int(11) NOT NULL AUTO_INCREMENT,
+        phone bigint(50) NOT NULL,
+        user_message text NOT NULL,
+        bot_response text NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        KEY fk_chatbot_user (phone),
+        CONSTRAINT fk_chatbot_user FOREIGN KEY (phone) REFERENCES users (phone) ON DELETE CASCADE ON UPDATE CASCADE
+      )
+    `);
     // Insert sample data
     await insertSampleData(connection);
 
