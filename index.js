@@ -708,6 +708,13 @@ app.post('/api/savings', authenticateToken, async (req, res) => {
       });
     }
 
+    if (terkumpul < 0) {
+      return res.status(400).json({
+        message: 'Savings intial amount cannot be less than 0',
+      });
+    }
+
+
     // If collected > 0 and deductFromBalance is true, deduct the user's balance
     if (terkumpul > 0 && deductFromBalance) {
       // Check balance
