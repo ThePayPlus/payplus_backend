@@ -132,7 +132,7 @@ app.get('/', (req, res) => {
 
 // Mulai server di port 3000
 server.listen(3000, () => {
-  console.log('Server is running on http://10.0.2.2:3000');
+  console.log('Server is running on http://localhost:3000');
 });
 
 // Routes
@@ -713,7 +713,6 @@ app.post('/api/savings', authenticateToken, async (req, res) => {
         message: 'Savings intial amount cannot be less than 0',
       });
     }
-
 
     // If collected > 0 and deductFromBalance is true, deduct the user's balance
     if (terkumpul > 0 && deductFromBalance) {
