@@ -5,14 +5,21 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
-const WebSocket = require('ws');
 const http = require('http');
+const { Server } = require('socket.io');
 const { OpenAI } = require('openai');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
+const io = new Server(server, {
+  cors: {
+    origin: '*', // Ubah ke URL frontend Anda
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true,
+  },
+});
 const openai = new OpenAI({
   apiKey: process.env.GPT_API_KEY,
 });
@@ -104,24 +111,80 @@ const authenticateToken = (req, res, next) => {
   });
 };
 
-// Tangani koneksi WebSocket
-wss.on('connection', (ws) => {
-  console.log('A user connected');
+// Tangani koneksi Socket.IO
+io.use((socket, next) => {
+  // Autentikasi socket berdasarkan token
+  const token = socket.handshake.query.token;
+  if (!token) {
+    return next(new Error('Authentication error'));
+  }
+
+  jwt.verify(token, process.env.JWT_SECRET || 'payplus_secret_key', (err, decoded) => {
+    if (err) {
+      return next(new Error('Authentication error'));
+    }
+
+    // Simpan data user di socket untuk digunakan nanti
+    socket.user = { phone: decoded.phone };
+    next();
+  });
+});
+
+io.on('connection', (socket) => {
+  console.log('A user connected:', socket.user.phone);
+
+  // Tambahkan user ke room berdasarkan nomor telepon
+  socket.join(socket.user.phone);
 
   // Mendengarkan pesan dari client
-  ws.on('message', (message) => {
-    console.log('received: %s', message);
+  socket.on('message', async (messageData) => {
+    console.log('received message:', messageData);
 
-    // Kirim pesan kembali ke semua client yang terhubung
-    wss.clients.forEach((client) => {
-      if (client !== ws && client.readyState === WebSocket.OPEN) {
-        client.send(message);
+    try {
+      const senderPhone = socket.user.phone;
+      const { receiver, message } = messageData;
+
+      // Validasi input
+      if (!receiver || !message) {
+        socket.emit('error', { message: 'Receiver and message are required' });
+        return;
       }
-    });
+
+      // Simpan pesan ke database
+      await pool.query('INSERT INTO messages (sender_phone, receiver_phone, message) VALUES (?, ?, ?)', [senderPhone, receiver, message]);
+
+      // Tambahkan informasi pengirim ke pesan
+      const fullMessage = {
+        type: 'message',
+        sender: senderPhone,
+        receiver: receiver,
+        message: message,
+        sent_at: new Date().toISOString(),
+      };
+
+      // Kirim pesan ke pengirim dan penerima
+      io.to(senderPhone).emit('message', fullMessage);
+      io.to(receiver).emit('message', fullMessage);
+    } catch (error) {
+      console.error('Message error:', error);
+      socket.emit('error', { message: 'Failed to send message' });
+    }
   });
 
-  ws.on('close', () => {
-    console.log('A user disconnected');
+  // Mendengarkan status typing
+  socket.on('typing', (data) => {
+    const { receiver } = data;
+    io.to(receiver).emit('typing', { sender: socket.user.phone });
+  });
+
+  // Mendengarkan status stop typing
+  socket.on('stop-typing', (data) => {
+    const { receiver } = data;
+    io.to(receiver).emit('stop-typing', { sender: socket.user.phone });
+  });
+
+  socket.on('disconnect', () => {
+    console.log('A user disconnected:', socket.user.phone);
   });
 });
 
