@@ -404,11 +404,6 @@ app.post('/api/friends', authenticateToken, async (req, res) => {
       return res.status(404).json({ message: 'Pengguna dengan nomor telepon tersebut tidak ditemukan' });
     }
 
-    // Cek apakah mencoba menambahkan diri sendiri
-    if (userPhone === friendPhone) {
-      return res.status(400).json({ message: 'Anda tidak dapat menambahkan diri sendiri sebagai teman' });
-    }
-
     // Cek apakah pertemanan sudah ada
     const [existingFriendship] = await pool.query('SELECT * FROM friends WHERE (user_phone = ? AND friend_phone = ?) OR (user_phone = ? AND friend_phone = ?)', [userPhone, friendPhone, friendPhone, userPhone]);
 
@@ -476,7 +471,7 @@ app.get('/api/friends/requests', authenticateToken, async (req, res) => {
     // Ambil daftar permintaan pertemanan yang pending
     const [pendingRequests] = await pool.query(
       `
-      SELECT f.id, f.user_phone, u.name as requester_name, f.created_at
+      SELECT f.id, f.user_phone as phone, u.name as requester_name, f.created_at
       FROM friends f
       JOIN users u ON f.user_phone = u.phone
       WHERE f.friend_phone = ? AND f.status = 'pending'
