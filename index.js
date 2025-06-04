@@ -280,13 +280,13 @@ app.post('/api/auth/login', async (req, res) => {
     const { phone, password } = req.body;
 
     if (!phone || !password) {
-      return res.status(400).json({ message: 'Nomor telepon dan password diperlukan' });
+      return res.status(400).json({ message: 'Phone number and password are required' });
     }
 
     const [rows] = await pool.query('SELECT * FROM users WHERE phone = ?', [phone]);
 
     if (rows.length === 0) {
-      return res.status(401).json({ message: 'Login gagal. Nomor telepon atau password salah.' });
+      return res.status(401).json({ message: 'Login failed. Incorrect phone number or password.' });
     }
 
     const user = rows[0];
@@ -312,7 +312,7 @@ app.post('/api/auth/login', async (req, res) => {
     }
 
     if (!isPasswordValid) {
-      return res.status(401).json({ message: 'Login gagal. Nomor telepon atau password salah.' });
+      return res.status(401).json({ message: 'Login failed. Incorrect phone number or password.' });
     }
 
     // Generate JWT token
@@ -327,7 +327,7 @@ app.post('/api/auth/login', async (req, res) => {
     });
 
     res.status(200).json({
-      message: 'Login berhasil',
+      message: 'Login successful',
       phone: user.phone,
       token, // Still include token in response for client-side storage if needed
     });
@@ -340,7 +340,7 @@ app.post('/api/auth/login', async (req, res) => {
 //## LOGOUT
 app.post('/api/auth/logout', (req, res) => {
   res.clearCookie('token');
-  res.json({ message: 'Logout berhasil' });
+  res.json({ message: 'Logout successful' });
 });
 
 // Register endpoint
@@ -350,7 +350,7 @@ app.post('/api/auth/register', async (req, res) => {
 
     if (!phone || !name || !email || !password) {
       return res.status(400).json({
-        message: 'Semua kolom (phone, name, email, password) harus diisi',
+        message: 'All fields (phone, name, email, password) are required',
       });
     }
 
@@ -359,7 +359,7 @@ app.post('/api/auth/register', async (req, res) => {
 
     if (existingUsers.length > 0) {
       return res.status(400).json({
-        message: 'Registrasi gagal. Nomor telepon sudah terdaftar.',
+        message: 'Registration failed. Phone number already registered.',
       });
     }
 
@@ -370,7 +370,7 @@ app.post('/api/auth/register', async (req, res) => {
     // Insert new user with hashed password
     await pool.query('INSERT INTO users (phone, name, email, password, balance) VALUES (?, ?, ?, ?, ?)', [phone, name, email, hashedPassword, 0]);
 
-    res.status(201).json({ message: 'Registrasi berhasil' });
+    res.status(201).json({ message: 'Registration successful' });
   } catch (error) {
     console.error('Register error:', error);
     res.status(500).json({ message: 'Server error' });
@@ -385,23 +385,23 @@ app.post('/api/friends', authenticateToken, async (req, res) => {
     const { friendPhone } = req.body;
 
     if (!friendPhone) {
-      return res.status(400).json({ message: 'Nomor telepon teman diperlukan' });
+      return res.status(400).json({ message: 'Friend phone number is required' });
     }
 
     // Validasi format nomor telepon
     if (!/^\d+$/.test(friendPhone)) {
-      return res.status(400).json({ message: 'Format nomor telepon tidak valid' });
+      return res.status(400).json({ message: 'Invalid phone number format' });
     }
 
     // Cek apakah nomor telepon teman ada di database
     const [friendExists] = await pool.query('SELECT * FROM users WHERE phone = ?', [friendPhone]);
 
     if (userPhone === friendPhone) {
-      return res.status(400).json({ message: 'Anda tidak dapat menambahkan diri sendiri sebagai teman' });
+      return res.status(400).json({ message: 'You cannot add yourself as a friend' });
     }
 
     if (friendExists.length === 0) {
-      return res.status(404).json({ message: 'Pengguna dengan nomor telepon tersebut tidak ditemukan' });
+      return res.status(404).json({ message: 'User with that phone number not found' });
     }
 
     // Cek apakah pertemanan sudah ada
@@ -411,20 +411,20 @@ app.post('/api/friends', authenticateToken, async (req, res) => {
       const friendship = existingFriendship[0];
 
       if (friendship.status === 'accepted') {
-        return res.status(400).json({ message: 'Pengguna ini sudah menjadi teman Anda' });
+        return res.status(400).json({ message: 'This user is already your friend' });
       } else if (friendship.status === 'pending') {
-        return res.status(400).json({ message: 'Permintaan pertemanan sudah dikirim sebelumnya' });
+        return res.status(400).json({ message: 'Friend request already sent' });
       } else if (friendship.status === 'rejected') {
         // Jika ditolak sebelumnya, bisa mencoba lagi
         await pool.query('UPDATE friends SET status = "pending", updated_at = NOW() WHERE id = ?', [friendship.id]);
-        return res.status(200).json({ message: 'Permintaan pertemanan berhasil dikirim' });
+        return res.status(200).json({ message: 'Friend request sent successfully' });
       }
     }
 
     // Tambahkan pertemanan baru
     await pool.query('INSERT INTO friends (user_phone, friend_phone, status) VALUES (?, ?, "pending")', [userPhone, friendPhone]);
 
-    res.status(201).json({ message: 'Permintaan pertemanan berhasil dikirim' });
+    res.status(201).json({ message: 'Friend request sent successfully' });
   } catch (error) {
     console.error('Add friend error:', error);
     res.status(500).json({ message: 'Server error' });
@@ -454,7 +454,7 @@ app.get('/api/friends', authenticateToken, async (req, res) => {
     );
 
     res.status(200).json({
-      message: 'Daftar teman berhasil diambil',
+      message: 'Friends list retrieved successfully',
       friends: friends,
     });
   } catch (error) {
@@ -482,7 +482,7 @@ app.get('/api/friends/requests', authenticateToken, async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: 'Daftar permintaan pertemanan berhasil diambil',
+      message: 'Friend requests retrieved successfully',
       data: pendingRequests,
     });
   } catch (error) {
@@ -504,7 +504,7 @@ app.put('/api/friends/:id', authenticateToken, async (req, res) => {
     if (!['accepted', 'rejected'].includes(status)) {
       return res.status(400).json({
         success: false,
-        message: 'Status tidak valid. Gunakan "accepted" atau "rejected"',
+        message: 'Invalid status. Use "accepted" or "rejected"',
       });
     }
 
@@ -514,7 +514,7 @@ app.put('/api/friends/:id', authenticateToken, async (req, res) => {
     if (friendRequest.length === 0) {
       return res.status(404).json({
         success: false,
-        message: 'Permintaan pertemanan tidak ditemukan',
+        message: 'Friend request not found',
       });
     }
 
@@ -523,7 +523,7 @@ app.put('/api/friends/:id', authenticateToken, async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: status === 'accepted' ? 'Permintaan pertemanan diterima' : 'Permintaan pertemanan ditolak',
+      message: status === 'accepted' ? 'Friend request accepted' : 'Friend request rejected',
     });
   } catch (error) {
     console.error('Update friend request error:', error);
@@ -544,14 +544,14 @@ app.patch('/api/friends/respond/:requestId', authenticateToken, async (req, res)
     if (!requestId || !action) {
       return res.status(400).json({
         success: false,
-        message: 'ID permintaan dan aksi (accept/reject) diperlukan',
+        message: 'Request ID and action (accept/reject) are required',
       });
     }
 
     if (action !== 'accept' && action !== 'reject') {
       return res.status(400).json({
         success: false,
-        message: 'Aksi harus berupa "accept" atau "reject"',
+        message: 'Action must be "accept" or "reject"',
       });
     }
 
@@ -561,7 +561,7 @@ app.patch('/api/friends/respond/:requestId', authenticateToken, async (req, res)
     if (friendRequest.length === 0) {
       return res.status(404).json({
         success: false,
-        message: 'Permintaan pertemanan tidak ditemukan',
+        message: 'Friend request not found',
       });
     }
 
@@ -570,7 +570,7 @@ app.patch('/api/friends/respond/:requestId', authenticateToken, async (req, res)
     if (request.status !== 'pending') {
       return res.status(400).json({
         success: false,
-        message: 'Permintaan pertemanan ini sudah diproses sebelumnya',
+        message: 'This friend request has already been processed',
       });
     }
 
@@ -580,7 +580,7 @@ app.patch('/api/friends/respond/:requestId', authenticateToken, async (req, res)
 
     res.status(200).json({
       success: true,
-      message: action === 'accept' ? 'Permintaan pertemanan diterima' : 'Permintaan pertemanan ditolak',
+      message: action === 'accept' ? 'Friend request accepted' : 'Friend request rejected',
     });
   } catch (error) {
     console.error('Respond to friend request error:', error);
@@ -600,7 +600,7 @@ app.delete('/api/friends/:friendPhone', authenticateToken, async (req, res) => {
     if (!friendPhone) {
       return res.status(400).json({
         success: false,
-        message: 'Nomor telepon teman diperlukan',
+        message: 'Friend phone number is required',
       });
     }
 
@@ -614,7 +614,7 @@ app.delete('/api/friends/:friendPhone', authenticateToken, async (req, res) => {
     if (existingFriendship.length === 0) {
       return res.status(404).json({
         success: false,
-        message: 'Pertemanan tidak ditemukan',
+        message: 'Friendship not found',
       });
     }
 
@@ -624,7 +624,7 @@ app.delete('/api/friends/:friendPhone', authenticateToken, async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: 'Teman berhasil dihapus dari daftar teman',
+      message: 'Friend successfully removed from friend list',
     });
   } catch (error) {
     console.error('Delete friend error:', error);
@@ -649,7 +649,7 @@ app.post('/api/messages', authenticateToken, async (req, res) => {
     // Simpan pesan ke database
     await pool.query('INSERT INTO messages (sender_phone, receiver_phone, message) VALUES (?, ?, ?)', [senderPhone, receiverPhone, message]);
 
-    res.status(201).json({ message: 'Pesan berhasil dikirim' });
+    res.status(201).json({ message: 'Message sent successfully' });
   } catch (error) {
     console.error('Send message error:', error);
     res.status(500).json({ message: 'Server error' });
@@ -718,7 +718,7 @@ app.patch('/api/profile', authenticateToken, async (req, res) => {
     }
     await pool.query('UPDATE users SET name = ?, email = ? WHERE phone = ?', [name, email, phone]);
 
-    res.json({ message: 'Profil berhasil diperbarui' });
+    res.json({ message: 'Profile updated successfully' });
   } catch (error) {
     console.error('Update profile error:', error);
     res.status(500).json({ message: 'Server error' });
@@ -733,7 +733,7 @@ app.patch('/api/change-password', authenticateToken, async (req, res) => {
 
     if (!oldPassword || !newPassword) {
       return res.status(400).json({
-        message: 'Password lama dan password baru harus diisi',
+        message: 'Old password and new password are required',
       });
     }
 
@@ -742,13 +742,13 @@ app.patch('/api/change-password', authenticateToken, async (req, res) => {
     const user = users[0];
     const isValid = await bcrypt.compare(oldPassword, user.password);
     if (!isValid) {
-      return res.status(401).json({ message: 'Password lama tidak valid' });
+      return res.status(401).json({ message: 'Old password is invalid' });
     }
 
     const hashedPassword = await bcrypt.hash(newPassword, 10);
     await pool.query('UPDATE users SET password = ? WHERE phone = ?', [hashedPassword, phone]);
 
-    res.json({ message: 'Password berhasil diubah' });
+    res.json({ message: 'Password changed successfully' });
   } catch (error) {
     res.status(500).json({ message: 'Server error' });
   }
@@ -768,7 +768,7 @@ app.post('/api/savings', authenticateToken, async (req, res) => {
 
     if (terkumpul < 0) {
       return res.status(400).json({
-        message: 'Savings intial amount cannot be less than 0',
+        message: 'Savings initial amount cannot be less than 0',
       });
     }
 
@@ -974,7 +974,7 @@ app.patch('/api/savings/:id/add', authenticateToken, async (req, res) => {
 
       // Check balance
       if (userBalance < amount) {
-        return res.status(400).json({ message: 'Saldo tidak mencukupi' });
+        return res.status(400).json({ message: 'insufficient balance' });
       }
 
       // Deduct balance
@@ -1022,7 +1022,7 @@ app.delete('/api/savings/:id', authenticateToken, async (req, res) => {
 
     if (savingRows.length === 0) {
       return res.status(404).json({
-        message: 'Tabungan tidak ditemukan atau bukan milik Anda',
+        message: 'Savings not found or not owned by you',
       });
     }
 
@@ -1170,7 +1170,7 @@ app.post('/api/bills', authenticateToken, async (req, res) => {
     if (!name || !amount || !dueDate || !category) {
       return res.status(400).json({
         success: false,
-        message: 'Semua kolom (name, amount, dueDate, category) harus diisi',
+        message: 'All fields (name, amount, dueDate, category) are required',
       });
     }
 
@@ -1182,7 +1182,7 @@ app.post('/api/bills', authenticateToken, async (req, res) => {
 
     res.status(201).json({
       success: true,
-      message: 'Tagihan berhasil ditambahkan',
+      message: 'Bill added successfully',
       data: {
         id: newBill[0].id,
         name: newBill[0].name,
@@ -1195,7 +1195,7 @@ app.post('/api/bills', authenticateToken, async (req, res) => {
     console.error('Create bill error:', error);
     res.status(500).json({
       success: false,
-      message: 'Gagal menambahkan tagihan',
+      message: 'Failed to add bill',
     });
   }
 });
@@ -1211,7 +1211,7 @@ app.get('/api/bills', authenticateToken, async (req, res) => {
     res.json({ bills });
   } catch (error) {
     console.error('Get bills error:', error);
-    res.status(500).json({ message: 'Gagal mengambil data tagihan' });
+    res.status(500).json({ message: 'Failed to retrieve bill data' });
   }
 });
 
@@ -1226,7 +1226,7 @@ app.put('/api/bills/:id', authenticateToken, async (req, res) => {
     if (!name || !amount || !dueDate || !category) {
       return res.status(400).json({
         success: false,
-        message: 'Semua kolom (name, amount, dueDate, category) harus diisi',
+        message: 'All fields (name, amount, dueDate, category) are required',
       });
     }
 
@@ -1236,7 +1236,7 @@ app.put('/api/bills/:id', authenticateToken, async (req, res) => {
     if (bills.length === 0) {
       return res.status(404).json({
         success: false,
-        message: 'Data tagihan tidak ditemukan atau bukan milik Anda',
+        message: 'Bill not found or not owned by you',
       });
     }
 
@@ -1248,7 +1248,7 @@ app.put('/api/bills/:id', authenticateToken, async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Tagihan berhasil diperbarui',
+      message: 'Bill updated successfully',
       data: {
         id: updatedBill[0].id,
         name: updatedBill[0].name,
@@ -1261,7 +1261,7 @@ app.put('/api/bills/:id', authenticateToken, async (req, res) => {
     console.error('Update bill error:', error);
     res.status(500).json({
       success: false,
-      message: 'Gagal memperbarui tagihan',
+      message: 'Failed to update bill',
     });
   }
 });
@@ -1278,7 +1278,7 @@ app.delete('/api/bills/:id', authenticateToken, async (req, res) => {
     if (bills.length === 0) {
       return res.status(404).json({
         success: false,
-        message: 'Data tagihan tidak ditemukan atau bukan milik Anda',
+        message: 'Bill not found or not owned by you',
       });
     }
 
@@ -1296,14 +1296,14 @@ app.delete('/api/bills/:id', authenticateToken, async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Tagihan berhasil dihapus',
+      message: 'Bill deleted successfully',
       data: deletedBill,
     });
   } catch (error) {
     console.error('Delete bill error:', error);
     res.status(500).json({
       success: false,
-      message: 'Gagal menghapus tagihan',
+      message: 'Failed to delete bill',
     });
   }
 });
@@ -1339,7 +1339,7 @@ app.get('/api/transactions', authenticateToken, async (req, res) => {
     res.json({ income: formattedIncome, expense: formattedExpense });
   } catch (error) {
     console.error('Get transactions error:', error);
-    res.status(500).json({ message: 'Gagal mengambil data transaksi' });
+    res.status(500).json({ message: 'Failed to retrieve transaction data' });
   }
 });
 
@@ -1380,7 +1380,7 @@ app.get('/api/income-record', authenticateToken, async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Data pemasukan berhasil diambil',
+      message: 'Income records retrieved successfully',
       records: formattedRecords ?? [],
     });
   } catch (error) {
@@ -1553,7 +1553,7 @@ app.get('/api/expense-record', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('Get expense records error:', error);
-    res.status(500).json({ message: 'Gagal mengambil data riwayat pengeluaran' });
+    res.status(500).json({ message: 'Failed to retrieve expense history data' });
   }
 });
 
@@ -1598,7 +1598,7 @@ app.post('/api/expense-record', authenticateToken, async (req, res) => {
 
     if (senderData[0].balance < amount) {
       return res.status(400).json({
-        message: 'Saldo tidak mencukupi untuk melakukan transaksi ini',
+        message: 'Insufficient balance to perform this transaction',
       });
     }
 
@@ -1779,7 +1779,7 @@ app.post('/api/transfer', authenticateToken, async (req, res) => {
     if (!receiverPhone || !amount) {
       return res.status(400).json({
         success: false,
-        message: 'Nomor penerima dan jumlah transfer harus diisi',
+        message: 'Receiver phone number and transfer amount are required',
       });
     }
 
@@ -1788,7 +1788,7 @@ app.post('/api/transfer', authenticateToken, async (req, res) => {
     if (isNaN(transferAmount) || transferAmount <= 0) {
       return res.status(400).json({
         success: false,
-        message: 'Jumlah transfer harus berupa angka positif',
+        message: 'Transfer amount must be a positive number',
       });
     }
 
@@ -1798,7 +1798,7 @@ app.post('/api/transfer', authenticateToken, async (req, res) => {
     if (senders.length === 0) {
       return res.status(404).json({
         success: false,
-        message: 'Pengguna pengirim tidak ditemukan',
+        message: 'Sender not found',
       });
     }
 
@@ -1808,7 +1808,7 @@ app.post('/api/transfer', authenticateToken, async (req, res) => {
     if (senderBalance < transferAmount) {
       return res.status(400).json({
         success: false,
-        message: 'Saldo tidak mencukupi untuk melakukan transfer',
+        message: 'Insufficient balance to make the transfer',
       });
     }
 
@@ -1818,7 +1818,7 @@ app.post('/api/transfer', authenticateToken, async (req, res) => {
     if (receivers.length === 0) {
       return res.status(404).json({
         success: false,
-        message: 'Pengguna penerima tidak ditemukan',
+        message: 'Receiver not found',
       });
     }
 
@@ -1990,7 +1990,7 @@ app.get('/api/recent-transactions', authenticateToken, async (req, res) => {
     console.error('Recent transactions error:', error);
     res.status(500).json({
       success: false,
-      message: 'Gagal mengambil data transaksi terbaru',
+      message: 'Failed to fetch recent transactions data',
     });
   }
 });
@@ -2052,7 +2052,7 @@ app.get('/api/transaction-history', authenticateToken, async (req, res) => {
     console.error('Transaction histories error:', error);
     res.status(500).json({
       success: false,
-      message: 'Gagal mengambil data histori transaksi',
+      message: 'Failed to fetch transaction history data',
     });
   }
 });
