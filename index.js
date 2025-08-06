@@ -21,7 +21,8 @@ const io = new Server(server, {
   },
 });
 const openai = new OpenAI({
-  apiKey: process.env.GPT_API_KEY,
+  baseURL: 'https://openrouter.ai/api/v1',
+  apiKey: process.env.OPENROUTER_API_KEY,
 });
 
 // Middleware
@@ -218,9 +219,14 @@ app.post('/api/chatbot', authenticateToken, async (req, res) => {
 
     // Coba gunakan OpenAI API
     try {
-      // Panggil OpenAI API
+      // Panggil OpenAI API dengan konfigurasi OpenRouter
       const completion = await openai.chat.completions.create({
-        model: 'gpt-3.5-turbo',
+        extra_headers: {
+          'HTTP-Referer': process.env.SITE_URL || 'https://payplus.com', // Optional. Site URL for rankings on openrouter.ai.
+          'X-Title': process.env.SITE_NAME || 'PayPlus', // Optional. Site title for rankings on openrouter.ai.
+        },
+        extra_body: {},
+        model: 'openrouter/horizon-beta',
         messages: [
           { role: 'system', content: 'Kamu adalah asisten keuangan PayPlus yang membantu pengguna dengan pertanyaan tentang keuangan, fitur aplikasi, dan tips pengelolaan uang.' },
           { role: 'user', content: `Pengguna: ${user.name}\nSaldo: Rp${user.balance}\nPertanyaan: ${message}` },
